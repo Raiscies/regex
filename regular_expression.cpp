@@ -12,7 +12,7 @@
 	positive closure  +
 	optional          ?
 	wildcard          .
-
+	
 
 */
 
@@ -313,7 +313,8 @@ struct regular_expression {
 		select,     // |
 		lbrace,     // (
 		rbrace,     // ) the priority of right-brace is meanless
-		wildcard    // . the priority of wildcard is meanless
+		wildcard,   // . the priority of wildcard is meanless
+		char_set    // [chars...] or [^chars...]
 	};
 
 	static constexpr int priority(oper op) noexcept{
@@ -324,8 +325,6 @@ struct regular_expression {
 		case oper::concat  : return -1;
 		case oper::select   : return -2;
 		case oper::lbrace   : return -3;
-		// case oper::rbrace   : 
-		// case oper::wildcard : return -4;
 		default: return -114514;
 		}
 	}
@@ -550,6 +549,51 @@ struct regular_expression {
 
 	}
 
+	optional<edge> lex_char_set(typename string_view_t::const_iterator& pos, const typename string_view_t::const_iterator& end) {
+		// assume pos is pointing at the first char after the left square breaket
+
+
+		// bool invert_range = *pos == '^';
+		edge e{vector<edge::single_range>{}};
+		
+		auto merge_range = [&e](edge&& other){
+			using types = index_of_template_args<decltype(range)>;
+			switch(other.range.index()) {
+			case types::template index_of<char_t>: // single char
+
+				// return (c == std::get<char_t>(range)) ^ invert_range;
+
+			case types::template index_of<single_range>: // single range
+				// return std::get<single_range>(range).accept(c) ^ invert_range;
+
+			case types::template index_of<vector<single_range>>:	// multiple range
+				// if(!invert_range) {
+				// 	for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return true;
+				// 	return false;
+				// }else {
+				// 	for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return false;
+				// 	return true;
+				// }
+			default:
+				// return false;
+			}
+		};
+
+		while(pos != end && *pos != ']') {
+			switch(*pos) {
+			case '\\': {
+				if(auto e = lex_escape(++pos, end), e.has_value()) {
+
+				}else {
+					return {};
+				}
+				break;
+			}
+			default:
+			}
+		}
+	}
+
 	bool reduce(stack<pair<edge, state_t>>& output_stack, oper op, const pair<edge, state_t>& current_edge_state) {
 
 		switch(op) {
@@ -636,6 +680,10 @@ private:
 			return (x - 'A') + 10;
 		}
 	}
+
+	// static optional<edge> merge_range(const edge& e1, const edge& e2) {
+
+	// }
 
 }; // struct regular_expression
 
