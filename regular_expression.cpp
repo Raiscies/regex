@@ -21,9 +21,10 @@
 #include <stack>
 #include <vector>
 #include <string>
+#include <limits>
 #include <utility>
 #include <cstddef>
-#include <variant>
+// #include <variant>
 #include <optional>
 #include <iostream>
 #include <string_view>
@@ -36,35 +37,37 @@ using std::cin;
 using std::map;
 using std::set;
 using std::pair;
+using std::swap;
 using std::stack;
 using std::size_t;
 using std::string;
 using std::vector;
-using std::variant;
+// using std::variant;
 using std::optional;
+using std::in_place;
 using std::basic_string;
+using std::numeric_limits;
 using std::basic_string_view;
 
-template <typename VariantT>
-struct index_of_template_args {
-};
+// template <typename VariantT>
+// struct index_of_template_args {};
 
-template <template <typename...> class Templ, typename... Types>
-struct index_of_template_args<Templ<Types...>> {
-	private:
-	template <typename TargetT, typename... Ts>
-	struct impl {}; // empty Ts
-	template <typename TargetT, typename T, typename... Ts>
-	struct impl<TargetT, T, Ts...>: impl<TargetT, Ts...> {};
-	template <typename TargetT, typename... Ts> 
-	struct impl<TargetT, TargetT, Ts...> {
-		static constexpr size_t result = sizeof...(Types) - sizeof...(Ts) - 1;
-	};
+// template <template <typename...> class Templ, typename... Types>
+// struct index_of_template_args<Templ<Types...>> {
+// 	private:
+// 	template <typename TargetT, typename... Ts>
+// 	struct impl {}; // empty Ts
+// 	template <typename TargetT, typename T, typename... Ts>
+// 	struct impl<TargetT, T, Ts...>: impl<TargetT, Ts...> {};
+// 	template <typename TargetT, typename... Ts> 
+// 	struct impl<TargetT, TargetT, Ts...> {
+// 		static constexpr size_t result = sizeof...(Types) - sizeof...(Ts) - 1;
+// 	};
 
-public:
-	template <typename T>
-	static constexpr size_t index_of = impl<T, Types...>::result;
-};
+// public:
+// 	template <typename T>
+// 	static constexpr size_t index_of = impl<T, Types...>::result;
+// };
 
 template <typename CharT>
 struct non_determinstic_automaton {
@@ -79,67 +82,147 @@ struct non_determinstic_automaton {
 
 	using state_set_t = set<state_t>; // type of Q or subset of Q
 	
-	struct single_range { 
-		char_t from, to;
-		
-		single_range(char_t c) noexcept: from{c}, to{c} {}
-		single_range(char_t from_, char_t to_) noexcept: from{from_}, to{to_} {} 
+	// struct single_range {
+	// 	using limits = numeric_limits<char_t>;
 
-		bool accept(char_t c) const noexcept{
-			return from <= c && c <= to;
-		}
-	};
-	struct epsilon {}; // ε
+	// 	char_t from, to;
+	// 	bool invert_range;
+	// 	// if not invert_range : accept if c ∈ [from, to]
+	// 	// else                : accept if c ∉ [from, to]
+	// 	single_range(char_t c, bool invert_range_ = false) noexcept: from{c}, to{c}, invert_range{invert_range_} {}
+	// 	single_range(char_t from_, char_t to_, bool invert_range_ = false) noexcept: from{from_}, to{to_}, invert_range{invert_range_} {} 
+
+	// 	bool accept(char_t c) const noexcept{
+	// 		return (from <= c && c <= to) ^ invert_range;
+	// 	}
+
+	// 	single_range& invert() const noexcept{
+	// 		invert_range = !invert_range;
+	// 		return *this;
+	// 	}
+	// };
+	// struct epsilon {}; // ε
 
 	struct edge {
 
-		variant<std::monostate, epsilon, char_t, single_range, vector<single_range>> range;
+		char_t from, to;
+		enum class range_category {
+			epsilon,     // empty edge
 
-		bool invert_range = false; // if it is true, then accept any chars except of the range
+			single_char, // range of one char [from]
+			range,       // range: [from-to]
+			spaces,      // space chars: [\f\n\r\t\v]
+			words,       // identifier chars(words): [0-9a-zA-Z_]
+			digits,      // digit chars: [0-9]
+			// invert ranges 
+			invert_single_char, // [^c]
+			invert_range,       // [^from-to]
+			non_spaces,         // [^\f\n\r\t\v]
+			non_words,          // [^0-9a-zA-Z_]
+			non_digits,         // [^0-9]
+			non_newlines        // [^\n\r] (wildcard)
 
+		};
+		bool is_conjunction_range: 1;  // this edge is a part of conjunction_range
+		range_category category: 7;
+
+
+		// vector<stingle_range>: range is accepted iff all of the single_range is accepted(conjunction)
+		// variant<std::monostate, epsilon, char_t, single_range, vector<single_range>> range;
+		// vector<single_range> range; // conjunction_range
 		state_t target_state = -1;
 
+		// bool invert_range = false; // if it is true, then accept any chars except of the range
+
+
 		// construct a range with {c}
-		edge(char_t c, bool invert_range_ = false, state_t target = -1) noexcept: range{std::in_place_type<char_t>, c}, invert_range{invert_range_}, target_state{target} {}
+		edge(state_t target = -1) noexcept: category{range_category::epsilon}, target_state{target} {} // an empty(epsilon) edge
+		edge(range_category category_, state_t target = -1) noexcept: category{category_}, target_state{target} {}
+		edge(char_t c, bool invert_range_ = false, state_t target = -1) noexcept: category{invert_range_ ? range_category::invert_single_char : range_category::single_char}, from{c}, target_state{target} {}
+		edge(char_t from_, char_t to_, bool invert_range_ = false, state_t target = -1) noexcept: category{invert_range_ ? range_category::invert_range : range_category::range}, from{from_}, to{to_}, target_state{target} {}
+		// edge(char_t c, bool invert_range_ = false, state_t target = -1) noexcept: range{{c, invert_range_}}, target_state{target} {}
 
-		// construct a range with [from, to]
-		edge(char_t from, char_t to, bool invert_range_ = false, state_t target = -1) noexcept: range{std::in_place_type<single_range>, from, to}, invert_range{invert_range_}, target_state{target} {}
-		edge(single_range sr, bool invert_range_ = false, state_t target = -1) noexcept: range{std::in_place_type<single_range>, sr}, invert_range{invert_range_}, target_state{target} {}
+		// // // construct a range with [from, to]
+		// edge(char_t from, char_t to, bool invert_range_ = false, state_t target = -1) noexcept: range{{from, to, invert_range_}}, target_state{target} {}
+		// edge(single_range sr, state_t target = -1) noexcept: range{sr}, target_state{target} {}
 
-		// construct a multi-range
-		edge(vector<single_range>&& range_, bool invert_range_ = false, state_t target = -1) noexcept: range{std::move(range_)}, invert_range{invert_range_}, target_state{target} {}
-		edge(const vector<single_range>& range_, bool invert_range_ = false, state_t target = -1) noexcept: range{range_}, invert_range{invert_range_}, target_state{target} {}
+		// // // construct a conjunction range
+		// edge(vector<single_range>&& range_, state_t target = -1) noexcept: range{std::move(range_)}, target_state{target} {}
+		// edge(const vector<single_range>& range_, state_t target = -1) noexcept: range{range_}, target_state{target} {}
 		
-		edge(epsilon, state_t target = -1) noexcept: range{epsilon{}}, target_state{target} {}
-		edge() noexcept = default;
 
+		static constexpr bool in_range(char_t a, char_t b, char_t x) noexcept{ return a <= x && x <= b; }
 		bool accept(char_t c) const noexcept{
-			using types = index_of_template_args<decltype(range)>;
-			switch(range.index()) {
-			case types::template index_of<epsilon>: // epsilon 
-				return false; // assumption was broken
-
-			case types::template index_of<char_t>: // single char
-				return (c == std::get<char_t>(range)) ^ invert_range;
-
-			case types::template index_of<single_range>: // single range
-				return std::get<single_range>(range).accept(c) ^ invert_range;
-
-			case types::template index_of<vector<single_range>>:	// multiple range
-				if(!invert_range) {
-					for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return true;
-					return false;
-				}else {
-					for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return false;
-					return true;
-				}
+			switch(category) {
+			case range_category::epsilon: 
+				return false;
+			case range_category::single_char: // range of one char [from]
+				return c == from;
+			case range_category::range:       // range: [from-to]
+				return in_range(from, to, c);
+			case range_category::spaces:      // space chars: [\t\n\v\f\r] == [\x09-\x0d]
+				return in_range('\x09', '\x0d', c);
+			case range_category::words:       // identifier chars(words): [0-9a-zA-Z_]
+				return in_range('0', '9', c) || 
+				       in_range('a', 'z', c) || 
+				       in_range('A', 'Z', c) || 
+				       (c == '_');
+			case range_category::digits:      // digit chars: [0-9]
+				return in_range('0', '9', c);
+			case range_category::non_newlines:    // [^\n\r]
+				return c != '\n' && c != '\r';
+			// invert ranges 
+			case range_category::invert_single_char: // [^c]
+				return c != from;
+			case range_category::invert_range:       // [^from-to]
+				return !in_range(from, to, c);
+			case range_category::non_spaces:      // [^\t\n\v\f\r]
+				return !in_range('\x09', '\x0d', c);
+			case range_category::non_words:       // [^0-9a-zA-Z_]
+				return not( 
+					in_range('0', '9', c) || 
+			    	in_range('a', 'z', c) || 
+			    	in_range('A', 'Z', c) || 
+			    	(c == '_'));
+			case range_category::non_digits:      // [^0-9]
+				return !in_range('0', '9', c);
 			default:
 				return false;
-		}
+			}
+			// if(range.empty()) return false; 
+			// for(const auto& r: range) {
+			// 	if(!r.accept(c)) return false;
+			// }
+			// return true;
+			// using types = index_of_template_args<decltype(range)>;
+		// 	switch(range.index()) {
+		// 	case types::template index_of<epsilon>: // epsilon 
+		// 		return false; // assumption was broken
+
+		// 	case types::template index_of<char_t>: // single char
+		// 		return (c == std::get<char_t>(range)) ^ invert_range;
+
+		// 	case types::template index_of<single_range>: // single range
+		// 		return std::get<single_range>(range).accept(c) ^ invert_range;
+
+		// 	case types::template index_of<vector<single_range>>:	// conjunction range
+		// 		if(!invert_range) {
+		// 			for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return true;
+		// 			return false;
+		// 		}else {
+		// 			for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return false;
+		// 			return true;
+		// 		}
+		// 	default:
+		// 		return false;
+		// }
 	}
 	bool accept_epsilon() const noexcept{
-		return range.index() == 1;
-	} 
+		return category == range_category::epsilon;
+	}
+	// bool is_conjunction() const noexcept{
+	// 	return is_conjunction_range;
+	// }
 
 	edge& set_target(state_t index) noexcept{
 		target_state = index;
@@ -150,7 +233,7 @@ struct non_determinstic_automaton {
 	// δ: Q * (Σ ∪ {ε}) -> 2^Q
 struct transform_t {
 
-		// accept (q, {c-ranges}) -> {q-ranges}
+		// accept (q, {c-spaces}) -> {q-spaces}
 	vector<vector<edge>> m;
 
 	state_set_t& do_epsilon_closure(state_set_t& current_states) const{
@@ -247,7 +330,7 @@ public:
 	}
 	bool bind_empty_transform(state_t index, state_t target_index) {
 		if(index > max_state_index or target_index > max_state_index) return false;
-		delta.m[index].emplace_back(epsilon{}, target_index);
+		delta.m[index].emplace_back(target_index);
 		return true;
 	}
 
@@ -286,8 +369,8 @@ struct regular_expression {
 	using nfa_t = nfa<char_t>;
 	using edge = typename nfa_t::edge;
 	using state_t = typename nfa_t::state_t;
-	using single_range = typename nfa_t::single_range;
-	using epsilon = typename nfa_t::epsilon;
+	// using single_range = typename nfa_t::single_range;
+	// using epsilon = typename nfa_t::epsilon;
 
 	//parsing output: NFA M = (Q, Σ, δ, q0, F) 
 	nfa_t output;
@@ -322,7 +405,7 @@ struct regular_expression {
 		case oper::kleene   : 
 		case oper::positive :
 		case oper::optional : return 0;
-		case oper::concat  : return -1;
+		case oper::concat   : return -1;
 		case oper::select   : return -2;
 		case oper::lbrace   : return -3;
 		default: return -114514;
@@ -415,13 +498,15 @@ struct regular_expression {
 				state_t q = output.new_state();
 				if(*pos == '\\') {
 					// escape
-					if(auto lex_res = lex_escape(++pos, s.end()); lex_res.has_value()) e = lex_res.value();
+					if(auto lex_res = lex_escape(++pos, s.end()); lex_res.has_value()) 
+						e = lex_res.value();
 					else return {bad_escape, pos};
 
 					// pos has been moved at lex_escape(), so don't need to ++pos;
 				}else if(*pos == '.'){
 					// . (wildcard)
-					e = { vector<single_range>{'\n', '\r'}, true };
+					e = { edge::range_category::non_newlines };
+					// e = { vector<single_range>{'\n', '\r'}, true };
 					++pos;
 				}else {
 					e = {*pos};
@@ -467,6 +552,7 @@ struct regular_expression {
 	}
 
 	optional<edge> lex_escape(typename string_view_t::const_iterator& pos, const typename string_view_t::const_iterator& end) {
+
 		/*
 		character escapes::
 		1. control escape
@@ -526,72 +612,35 @@ struct regular_expression {
 				if((pos + 1) != end) {
 					return { char_t(val * 0x10 + hex_val(*pos++)) };
 				}else {
-						// actually it's a bad escape
+					// actually it's a bad escape
 					return { char_t(val) };
 				}
 			}else {	
-					// it is also a bad escape
+				// it is also a bad escape
 				++pos;
 				return {};
 			}
 		}
 
-		case 'd': return edge{'0', '9'};
-		case 'D': return edge{'0', '9', true};
-		case 's': return edge{ vector<single_range>{'\f', '\n', '\r', '\t', '\v'} };
-		case 'S': return edge{ vector<single_range>{'\f', '\n', '\r', '\t', '\v'}, true };  // any char except of \f, \n, \r, \t, \v
-		case 'w': return edge{ vector<single_range>{{'0', '9'}, {'a', 'z'}, {'A', 'Z'}, '_'} };
-		case 'W': return edge{ vector<single_range>{{'0', '9'}, {'a', 'z'}, {'A', 'Z'}, '_'}, true };
+		case 'd': return { edge::range_category::digits     };
+		case 'D': return { edge::range_category::non_digits };
+		case 's': return { edge::range_category::spaces     }; 
+		case 'S': return { edge::range_category::non_spaces };
+		case 'w': return { edge::range_category::words      };
+		case 'W': return { edge::range_category::non_words  };
+
+		// case 's': return { '\f', '\n', '\r', '\t', '\v' };
+		// case 'S': return { {'\f', true}, {'\n', true}, {'\r', true}, {'\t', true}, {'\v', true} };
+		// case 'w': return { {'0', '9'}, {'a', 'z'}, {'A', 'Z'}, '_' };
+		// case 's': return { vector<single_range>{'\f', '\n', '\r', '\t', '\v'} };
+		// case 'S': return { vector<single_range>{'\f', '\n', '\r', '\t', '\v'}, true };  // any char except of \f, \n, \r, \t, \v
+		// case 'w': return { vector<single_range>{{'0', '9'}, {'a', 'z'}, {'A', 'Z'}, '_'} };
+		// case 'W': return { vector<single_range>{{'0', '9'}, {'a', 'z'}, {'A', 'Z'}, '_'}, true };
 
 		}
 		// idenitity escapes
-		return edge{ *pos };
+		return { *pos };
 
-	}
-
-	optional<edge> lex_char_set(typename string_view_t::const_iterator& pos, const typename string_view_t::const_iterator& end) {
-		// assume pos is pointing at the first char after the left square breaket
-
-
-		// bool invert_range = *pos == '^';
-		edge e{vector<edge::single_range>{}};
-		
-		auto merge_range = [&e](edge&& other){
-			using types = index_of_template_args<decltype(range)>;
-			switch(other.range.index()) {
-			case types::template index_of<char_t>: // single char
-
-				// return (c == std::get<char_t>(range)) ^ invert_range;
-
-			case types::template index_of<single_range>: // single range
-				// return std::get<single_range>(range).accept(c) ^ invert_range;
-
-			case types::template index_of<vector<single_range>>:	// multiple range
-				// if(!invert_range) {
-				// 	for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return true;
-				// 	return false;
-				// }else {
-				// 	for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return false;
-				// 	return true;
-				// }
-			default:
-				// return false;
-			}
-		};
-
-		while(pos != end && *pos != ']') {
-			switch(*pos) {
-			case '\\': {
-				if(auto e = lex_escape(++pos, end), e.has_value()) {
-
-				}else {
-					return {};
-				}
-				break;
-			}
-			default:
-			}
-		}
 	}
 
 	bool reduce(stack<pair<edge, state_t>>& output_stack, oper op, const pair<edge, state_t>& current_edge_state) {
@@ -601,7 +650,7 @@ struct regular_expression {
 			// unary operator
 			auto& [e, q] = current_edge_state;    
 			output.bind_transform(q, e);     // q -e->...> q
-			edge new_e {epsilon{}, q};       // new_e = -ε->
+			edge new_e {q};       // new_e = -ε->
 			output_stack.emplace(new_e, q);  // -new_e-> q
 			break;
 		}
@@ -618,7 +667,7 @@ struct regular_expression {
 			state_t new_q = output.new_state();
 			output.bind_transform(new_q, e);
 			output.bind_empty_transform(new_q, q);
-			edge new_e = {epsilon{}, new_q};
+			edge new_e = {new_q};
 			output_stack.emplace(new_e, q);
 			break;
 		}
@@ -644,7 +693,7 @@ struct regular_expression {
 			state_t new_q2 = output.new_state();     // create new_q
 			output.bind_transform(new_q2, e0);       // new_q2 -e0->...> q0
 			output.bind_transform(new_q2, e1);       // new_q2 -e1->...> q1
-			edge new_e = {epsilon{}, new_q2};        // new_e = -ε->
+			edge new_e = {new_q2};                   // new_e = -ε->
 			output_stack.emplace(new_e, new_q);      // -new_e-> new_q2 -{-e0->...> q0, -e1->...> q1}-> new_q
 			break;
 		}
@@ -661,12 +710,58 @@ struct regular_expression {
 		output_stack.pop();
 		return reduce(output_stack, op, top);
 	}
+	// optional<edge> lex_char_set(typename string_view_t::const_iterator& pos, const typename string_view_t::const_iterator& end) {
+	// 	// assume pos is pointing at the first char after the left square breaket
 
-	state_t build_kleene_closure(state_t start, state_t end, edge e) {
-		output.bind_empty_transform(start, end);
-		output.bind_transform(end, end, e);
-		return end;
-	}
+
+	// 	// bool invert_range = *pos == '^';
+	// 	edge e{vector<edge::single_range>{}};
+		
+	// 	auto merge_range = [&e](edge&& other){
+	// 		using types = index_of_template_args<decltype(range)>;
+	// 		switch(other.range.index()) {
+	// 		case types::template index_of<char_t>: // single char
+
+	// 			// return (c == std::get<char_t>(range)) ^ invert_range;
+
+	// 		case types::template index_of<single_range>: // single range
+	// 			// return std::get<single_range>(range).accept(c) ^ invert_range;
+
+	// 		case types::template index_of<vector<single_range>>:	// multiple range
+	// 			// if(!invert_range) {
+	// 			// 	for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return true;
+	// 			// 	return false;
+	// 			// }else {
+	// 			// 	for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return false;
+	// 			// 	return true;
+	// 			// }
+	// 		default:
+	// 			// return false;
+	// 		}
+	// 	};
+
+	// 	while(pos != end && *pos != ']') {
+	// 		switch(*pos) {
+	// 		case '\\': {
+	// 			if(auto e = lex_escape(++pos, end), e.has_value()) {
+
+	// 			}else {
+	// 				return {};
+	// 			}
+	// 			break;
+	// 		}
+	// 		default:
+	// 		}
+	// 	}
+	// }
+
+
+
+	// state_t build_kleene_closure(state_t start, state_t end, edge e) {
+	// 	output.bind_empty_transform(start, end);
+	// 	output.bind_transform(end, end, e);
+	// 	return end;
+	// }
 
 private:
 
