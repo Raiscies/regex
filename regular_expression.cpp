@@ -38,6 +38,7 @@ using std::map;
 using std::set;
 using std::pair;
 using std::swap;
+using std::byte;
 using std::stack;
 using std::size_t;
 using std::string;
@@ -106,25 +107,43 @@ struct non_determinstic_automaton {
 	struct edge {
 
 		char_t from, to;
-		enum class range_category {
-			epsilon,     // empty edge
+		enum /*class*/ range_category: char {
+			epsilon = 0,     // empty edge
+			single_char = 1, // range of one char [from]
+			range       = 2, // range: [from-to]
+			spaces      = 3, // space chars: [\f\n\r\t\v]
+			words       = 4, // identifier chars(words): [0-9a-zA-Z_]
+			digits      = 5, // digit chars: [0-9]
+			newlines    = 6, // [\n\r](currently unused)
+			all         = 7, // any chars
 
-			single_char, // range of one char [from]
-			range,       // range: [from-to]
-			spaces,      // space chars: [\f\n\r\t\v]
-			words,       // identifier chars(words): [0-9a-zA-Z_]
-			digits,      // digit chars: [0-9]
+			conjunction_range = 8, // a flag to point out that the start state of this edge requires all of the edge it comes from is accepted (conjunction)
+			
 			// invert ranges 
-			invert_single_char, // [^c]
-			invert_range,       // [^from-to]
-			non_spaces,         // [^\f\n\r\t\v]
-			non_words,          // [^0-9a-zA-Z_]
-			non_digits,         // [^0-9]
-			non_newlines        // [^\n\r] (wildcard)
+			invert_single_char = -single_char,  // [^c]
+			invert_range       = -range,        // [^from-to]
+			non_spaces         = -spaces,       // [^\f\n\r\t\v]
+			non_words          = -words,        // [^0-9a-zA-Z_]
+			non_digits         = -digits,       // [^0-9]
+
+			non_newlines       = -newlines,     // [^\n\r] (wildcard)
+
+			none               = -all           // nothing could be accepted
+
+			// invert_single_char = single_char ^ 0b0111'1111, // [^c]
+			// invert_range       = range       ^ 0b0111'1111, // [^from-to]
+			// non_spaces         = spaces      ^ 0b0111'1111, // [^\f\n\r\t\v]
+			// non_words          = words       ^ 0b0111'1111, // [^0-9a-zA-Z_]
+			// non_digits         = digits      ^ 0b0111'1111, // [^0-9]
+
+			// non_newlines       = newlines    ^ 0b0111'1111, // [^\n\r] (wildcard)
+
+			// none               = all         ^ 0b0111'1111  // nothing could be accepted
+
 
 		};
-		bool is_conjunction_range: 1;  // this edge is a part of conjunction_range
-		range_category category: 7;
+		// bool is_conjunction_range: 1;  // this edge is a part of conjunction_range
+		range_category category;
 
 
 		// vector<stingle_range>: range is accepted iff all of the single_range is accepted(conjunction)
@@ -169,9 +188,13 @@ struct non_determinstic_automaton {
 				       (c == '_');
 			case range_category::digits:      // digit chars: [0-9]
 				return in_range('0', '9', c);
+			case range_category::newlines:
+				return c == '\n' || c == '\r';
+			case range_category::all:
+				return true;
+			// invert ranges 
 			case range_category::non_newlines:    // [^\n\r]
 				return c != '\n' && c != '\r';
-			// invert ranges 
 			case range_category::invert_single_char: // [^c]
 				return c != from;
 			case range_category::invert_range:       // [^from-to]
@@ -186,6 +209,8 @@ struct non_determinstic_automaton {
 			    	(c == '_'));
 			case range_category::non_digits:      // [^0-9]
 				return !in_range('0', '9', c);
+			case range_category::none:
+				return false;
 			default:
 				return false;
 			}
@@ -228,12 +253,40 @@ struct non_determinstic_automaton {
 		target_state = index;
 		return *this;
 	}
+
+	edge& set_range(char_t from_, char_t to_, bool invert_range_ = false) noexcept{
+		from = from_;
+		to = to_;
+		category = invert_range_ ? range_category::invert_range : range_category::range;
+		return *this;
+	}
+	edge& set_range(char_t c, bool invert_range_ = false) noexcept{
+		from = c;
+		category = invert_range_ ? range_category::invert_single_char : range_category::single_char;
+		return *this;
+	}
+	edge& set_range(range_category category_) noexcept{
+		category = category_;
+		return *this;
+	}
+
+
+	edge& invert() noexcept{
+		category = range_category(-category);
+		return *this;	
+	}
+	bool is_single_char() const noexcept{
+		return category == range_category::single_char;
+	}
+	bool is_conjunction_range() const noexcept{
+		return category == range_category::conjunction_range;
+	}
 }; 
 
 	// δ: Q * (Σ ∪ {ε}) -> 2^Q
 struct transform_t {
 
-		// accept (q, {c-spaces}) -> {q-spaces}
+	// accept (q, {c-spaces}) -> {q-spaces}
 	vector<vector<edge>> m;
 
 	state_set_t& do_epsilon_closure(state_set_t& current_states) const{
@@ -263,10 +316,20 @@ struct transform_t {
 		state_set_t new_states;
 
 		for(auto q: current_states) {
-				// for each protential current state
-			for(const auto& r: m[q]) {
+			// for each protential current state
+			if(m[q].empty()) continue;
+			else if(m[q][0].is_conjunction_range()) {
+				// this state and its edges are conjunction
+				// c is accepted only when all of the edges are accepted 
+				for(auto it = ++m[q].cbegin(); it != m[q].cend(); ++it)
+					if(!it->accept(c)) goto next_state;
+				new_states.insert(m[q][0].target_state);
+				next_state:;
+			}else {
+				for(const auto& r: m[q]) {
 					// for each range
-				if(r.accept(c)) new_states.insert(r.target_state);
+					if(r.accept(c)) new_states.insert(r.target_state);
+				}
 			}
 		}
 		return do_epsilon_closure(new_states);
@@ -305,16 +368,16 @@ public:
 		F.insert(index);
 	}
 
-	bool bind_transform(state_t index, state_t target_index, char_t begin_char, char_t end_char) {
-		if(index > max_state_index or target_index > max_state_index) return false;
-		// assume begin_char <= end_char
+	// bool bind_transform(state_t index, state_t target_index, char_t begin_char, char_t end_char) {
+	// 	if(index > max_state_index or target_index > max_state_index) return false;
+	// 	// assume begin_char <= end_char
 
-		delta.m[index].emplace_back(begin_char, end_char, target_index);
-		return true;
-	}
-	bool bind_transform(state_t index, state_t target_index, char_t begin_char) {
-		return bind_transform(begin_char, begin_char);
-	}
+	// 	delta.m[index].emplace_back(begin_char, end_char, target_index);
+	// 	return true;
+	// }
+	// bool bind_transform(state_t index, state_t target_index, char_t begin_char) {
+	// 	return bind_transform(begin_char, begin_char);
+	// }
 
 	bool bind_transform(state_t index, state_t target_index, const edge& e) {
 		if(index > max_state_index or target_index > max_state_index) return false;
@@ -384,7 +447,8 @@ struct regular_expression {
 		success = 0,
 		empty_operand, 
 		bad_escape, 
-		missing_brace
+		missing_brace,
+		bad_breaket_expression
 	};
 
 	enum class oper {
@@ -397,14 +461,18 @@ struct regular_expression {
 		lbrace,     // (
 		rbrace,     // ) the priority of right-brace is meanless
 		wildcard,   // . the priority of wildcard is meanless
-		char_set    // [chars...] or [^chars...]
+		breaket,       // [chars...]
+		breaket_invert // [^chars...]
 	};
 
 	static constexpr int priority(oper op) noexcept{
 		switch(op) {
 		case oper::kleene   : 
 		case oper::positive :
-		case oper::optional : return 0;
+		case oper::optional : 
+		case oper::breaket  :
+		case oper::breaket_invert: 
+			return 0;
 		case oper::concat   : return -1;
 		case oper::select   : return -2;
 		case oper::lbrace   : return -3;
@@ -492,26 +560,44 @@ struct regular_expression {
 				++pos;
 				has_potential_concat_oper = true;
 				break;
+			case '[': {
+				// [c...] breaket expression
+				if(++pos == s.end()) return {bad_breaket_expression, pos};
+				bool invert_range = false;
+				if(*pos == '^') {
+					invert_range = true;
+					++pos;
+				}
+				if(auto breaket_res = parse_breaket(pos, s.end()); breaket_res.has_value()) {
+					if(!invert_range) reduce_breaket(output_stack, breaket_res.value());
+					else              reduce_breaket_invert(output_stack, breaket_res.value()); 
+				}else return {bad_breaket_expression, pos};
+				
+				has_potential_concat_oper = true;
+				break;
+			}
 			default: {
 				// is character(s)/wildcard
 				edge e;
 				state_t q = output.new_state();
-				if(*pos == '\\') {
+				switch(*pos) {
+				case '\\':
 					// escape
 					if(auto lex_res = lex_escape(++pos, s.end()); lex_res.has_value()) 
 						e = lex_res.value();
 					else return {bad_escape, pos};
-
 					// pos has been moved at lex_escape(), so don't need to ++pos;
-				}else if(*pos == '.'){
+					break;
+				case '.':
 					// . (wildcard)
 					e = { edge::range_category::non_newlines };
-					// e = { vector<single_range>{'\n', '\r'}, true };
 					++pos;
-				}else {
+					break;
+				default:
 					e = {*pos};
 					++pos;
 				}
+				
 				e.set_target(q);
 				if(has_potential_concat_oper && !insert_concat_oper(output_stack, oper_stack)) {
 					return {empty_operand, pos};
@@ -597,7 +683,7 @@ struct regular_expression {
 		case 't': return {'\t'};
 		case 'v': return {'\v'};
 		case '0': return {'\0'};
-
+		case 'b': return {'\b'}; // backspace // TODO: this works only when in breaket expression.
 		case 'c': {
 			if(pos != end) {
 				return { char_t(*pos++ % 32) };
@@ -629,14 +715,6 @@ struct regular_expression {
 		case 'w': return { edge::range_category::words      };
 		case 'W': return { edge::range_category::non_words  };
 
-		// case 's': return { '\f', '\n', '\r', '\t', '\v' };
-		// case 'S': return { {'\f', true}, {'\n', true}, {'\r', true}, {'\t', true}, {'\v', true} };
-		// case 'w': return { {'0', '9'}, {'a', 'z'}, {'A', 'Z'}, '_' };
-		// case 's': return { vector<single_range>{'\f', '\n', '\r', '\t', '\v'} };
-		// case 'S': return { vector<single_range>{'\f', '\n', '\r', '\t', '\v'}, true };  // any char except of \f, \n, \r, \t, \v
-		// case 'w': return { vector<single_range>{{'0', '9'}, {'a', 'z'}, {'A', 'Z'}, '_'} };
-		// case 'W': return { vector<single_range>{{'0', '9'}, {'a', 'z'}, {'A', 'Z'}, '_'}, true };
-
 		}
 		// idenitity escapes
 		return { *pos };
@@ -644,13 +722,12 @@ struct regular_expression {
 	}
 
 	bool reduce(stack<pair<edge, state_t>>& output_stack, oper op, const pair<edge, state_t>& current_edge_state) {
-
 		switch(op) {
 		case oper::kleene: {  // *
 			// unary operator
 			auto& [e, q] = current_edge_state;    
 			output.bind_transform(q, e);     // q -e->...> q
-			edge new_e {q};       // new_e = -ε->
+			edge new_e {q};                  // new_e = -ε->
 			output_stack.emplace(new_e, q);  // -new_e-> q
 			break;
 		}
@@ -697,7 +774,6 @@ struct regular_expression {
 			output_stack.emplace(new_e, new_q);      // -new_e-> new_q2 -{-e0->...> q0, -e1->...> q1}-> new_q
 			break;
 		}
-
 		default: {
 			// unknown operators
 		}
@@ -710,52 +786,123 @@ struct regular_expression {
 		output_stack.pop();
 		return reduce(output_stack, op, top);
 	}
-	// optional<edge> lex_char_set(typename string_view_t::const_iterator& pos, const typename string_view_t::const_iterator& end) {
-	// 	// assume pos is pointing at the first char after the left square breaket
+	void reduce_breaket(stack<pair<edge, state_t>>& output_stack, vector<edge>& edges) {
+		if(edges.empty()) {
+			// []
+			state_t new_q = output.new_state();
+			// -x-> new_q
+			// always not accept
+			output_stack.emplace(edge{edge::range_category::none, new_q}, new_q);
+		}
+		// [r1...rn]
+		state_t new_q1 = output.new_state(), 
+		        new_q2 = output.new_state();
+		edge new_e = {new_q1}; // new_e: -ε-> new_q1
+		// -ε-> new_q1 -{e1, e2, ...en}-> new_q2
+		for(auto& e: edges) 
+			output.bind_transform(new_q1, e.set_target(new_q2));
+
+		output_stack.emplace(new_e, new_q2);
+	}
+	void reduce_breaket_invert(stack<pair<edge, state_t>>& output_stack, vector<edge>& edges) {
+		if(edges.empty()) {
+			// [^]
+			state_t new_q = output.new_state();
+			// ---> new_q
+			// always accept
+			output_stack.emplace(edge{edge::range_category::all, new_q}, new_q);
+		}else if(edges.size() == 1) {
+			// [^r]
+			state_t new_q = output.new_state();
+			// -^e-> new_q
+			output_stack.emplace(edges[0].invert().set_target(new_q), new_q);
+		}else {
+			// [^r1...rn]
+			state_t new_q1 = output.new_state(), 
+			        new_q2 = output.new_state();
+			edge new_e = {new_q1}; // new_e: -ε-> new_q1
+			output.bind_transform(new_q1, edge{edge::range_category::conjunction_range, new_q2});
+			// -ε-> new_q1 -{conjunction_flag, ^e1, ^e2, ...^en}-> new_q2
+			for(auto& e: edges) 
+				output.bind_transform(new_q1, e.invert().set_target(new_q2));
+
+			output_stack.emplace(new_e, new_q2);
+
+		}
+
+	}
+
+	optional<vector<edge>> parse_breaket(typename string_view_t::const_iterator& pos, const typename string_view_t::const_iterator& end) {
+		// assume pos is pointing at the first char after the left square breaket '['
+
+		// bool invert_range = false;
+		// if(*pos == '^') {
+		// 	invert_range = true;
+		// 	++pos;
+		// }
+		// edge e{vector<edge::single_range>{}};
+		vector<edge> edges;
+		// bool dash_is_literal = true;
+		enum {
+			parse_char, 
+			parse_range, 
+			parse_char_literally // treat '-' as a literal char
+		} state = parse_char_literally;
 
 
-	// 	// bool invert_range = *pos == '^';
-	// 	edge e{vector<edge::single_range>{}};
-		
-	// 	auto merge_range = [&e](edge&& other){
-	// 		using types = index_of_template_args<decltype(range)>;
-	// 		switch(other.range.index()) {
-	// 		case types::template index_of<char_t>: // single char
-
-	// 			// return (c == std::get<char_t>(range)) ^ invert_range;
-
-	// 		case types::template index_of<single_range>: // single range
-	// 			// return std::get<single_range>(range).accept(c) ^ invert_range;
-
-	// 		case types::template index_of<vector<single_range>>:	// multiple range
-	// 			// if(!invert_range) {
-	// 			// 	for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return true;
-	// 			// 	return false;
-	// 			// }else {
-	// 			// 	for(const auto& r: std::get<vector<single_range>>(range)) if(r.accept(c)) return false;
-	// 			// 	return true;
-	// 			// }
-	// 		default:
-	// 			// return false;
-	// 		}
-	// 	};
-
-	// 	while(pos != end && *pos != ']') {
-	// 		switch(*pos) {
-	// 		case '\\': {
-	// 			if(auto e = lex_escape(++pos, end), e.has_value()) {
-
-	// 			}else {
-	// 				return {};
-	// 			}
-	// 			break;
-	// 		}
-	// 		default:
-	// 		}
-	// 	}
-	// }
-
-
+		while(pos != end && *pos != ']') {
+			if(state != parse_range) {
+				// state == parse_char or parse_char_literally
+				switch(*pos) {
+				case '\\': 
+					if(auto lex_res = lex_escape(++pos, end); lex_res.has_value()) {
+						edges.emplace_back(lex_res.value());
+					}else return {};
+					state = parse_char;
+					break;
+				case '-':
+					if(state == parse_char_literally) {
+						edges.emplace_back('-');
+						state = parse_char;
+					}else {
+						if(!edges.back().is_single_char()) return {}; // bad char range like [\w-...]
+						state = parse_range;
+					}
+					++pos;
+					break;
+				default:
+					// chars
+					edges.emplace_back(*pos++);
+					state = parse_char;
+				}
+			}else {
+				// state == parse_range
+				switch(*pos) {
+				case '\\': 
+					if(auto lex_res = lex_escape(++pos, end); lex_res.has_value()) {
+						if(!lex_res.value().is_single_char()) {
+							return {}; // bad char range like: [c-\w]
+						}
+						edges.back().set_range(edges.back().from, lex_res.value().from); // [p-\q]
+					}else return {};
+				default:
+					// chars
+					// parse_char_literally
+					edges.back().set_range(edges.back().from, *pos); // [p-q]
+					++pos;
+				}
+				state = parse_char_literally;
+			}
+		}
+		// if(invert_range) {
+		// 	for(auto& e: edges) e.invert();
+		// }
+		if(pos == end) {
+			return {};
+		}
+		++pos;
+		return edges;
+	}
 
 	// state_t build_kleene_closure(state_t start, state_t end, edge e) {
 	// 	output.bind_empty_transform(start, end);
