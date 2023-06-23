@@ -10,7 +10,7 @@
 	positive closure  +
 	optional          ?
 	wildcard          .
-	
+	breaket           [...], [^...]
 
 */
 
@@ -33,8 +33,10 @@ namespace rais {
 using std::cin;
 using std::map;
 using std::set;
+using std::get;
 using std::pair;
 using std::swap;
+using std::tuple;
 using std::stack;
 using std::size_t;
 using std::string;
@@ -47,7 +49,7 @@ using std::basic_string_view;
 
 template <typename CharT>
 struct non_determinstic_automaton {
-	// a non-determinstic-automaton
+	// a non-determinstic-finite-automaton(NFA)
 
 
 	// NFA M = (Q, Σ, δ, q0, F) 
@@ -188,7 +190,7 @@ struct transform_t {
 	state_set_t& do_epsilon_closure(state_set_t& current_states) const{
 			// do ε-closure(current_states) and assign to itself
 		state_set_t current_appended_states = current_states, 
-		next_appended_states;
+		               next_appended_states;
 		while(true) {
 			for(auto q: current_appended_states) {
 				for(const auto& r: m[q]) {
@@ -308,7 +310,7 @@ public:
 template <typename CharT>
 using nfa = non_determinstic_automaton<CharT>;
 
-template <typename CharT>
+template <typename CharT, size_t max_unroll_complexity_ = 500>
 struct regular_expression {
 	using char_t = CharT;
 	using string_t = basic_string<char_t>;
@@ -317,6 +319,35 @@ struct regular_expression {
 	using nfa_t = nfa<char_t>;
 	using edge = typename nfa_t::edge;
 	using state_t = typename nfa_t::state_t;
+
+	using complexity_t = size_t;
+	static constexpr complexity_t max_unroll_complexity = complexity_t(max_unroll_complexity_);
+	/*	sub expression(e) complexity(ψ) algorithm:
+		e = 
+			R or [] or [R] or [^] or [^R]   (R is a single range/edge)
+			             : ψ(e) = 1
+			[R1R2...Rn]  : ψ(e) = n + 1  (n > 1)
+			[^R1R2...Rn] : ψ(e) = n + 2  (n > 1)
+			e1 | e2      : ψ(e) = ψ(e1) + ψ(e2) + 3
+			e1 e2        : ψ(e) = ψ(e1) + ψ(e2)
+			e1*          : ψ(e) = ψ(e1) + 1
+			e1+          : ψ(e) = ψ(e1) + 2
+			e1?          : ψ(e) = ψ(e1) + 2
+			e1{m}        : ψ(e) = mψ(e)
+			e1{m,}       : ψ(e) = (m + 1)ψ(e) + 1
+			e1{m,n}      : ψ(e) = nψ(e) + 2(n - m)
+
+		if ψ(e) <= max_unroll_complexity: 
+			using trivial unroll algorithm: 
+				e{m}   -> e...e for m times e;
+				e{m,}  -> e...e+ for m times e;
+				e{m,n} -> e...e(e?...e?) for m times e and n - m times (e?)
+		else: 
+			using loop algorithm for them. 
+	*/
+
+	// the 3rd data of a tuple is used to compute the edge-state pair(or sub expression)'s complexity 	
+	using output_stack_t = stack<tuple<edge, state_t, complexity_t>>;
 
 	//parsing output: NFA M = (Q, Σ, δ, q0, F) 
 	nfa_t output;
@@ -386,10 +417,13 @@ struct regular_expression {
 		output.reset();
 		
 		if(s.empty()) return {success, nullptr};
-		
+
 
 		stack<oper> oper_stack;
-		stack<pair<edge, state_t>> output_stack;
+
+		// stack<tuple<edge, state_t, complexity_t>> output_stack;
+		output_stack_t output_stack;
+
 		bool has_potential_concat_oper = false;
 		for(auto pos = s.begin(); pos != s.end();) {
 			switch(*pos) {
@@ -485,7 +519,7 @@ struct regular_expression {
 					return {empty_operand, pos};
 				}
 				// push char
-				output_stack.emplace(std::move(e), q);
+				output_stack.emplace(std::move(e), q, 1);
 				
 				has_potential_concat_oper = true;
 				break;
@@ -503,12 +537,12 @@ struct regular_expression {
 			}
 			oper_stack.pop();
 		}
-		output.bind_transform(0, output_stack.top().first);
-		output.mark_final_state(output_stack.top().second);
+		output.bind_transform(0, get<0>(output_stack.top())/*.first*/);
+		output.mark_final_state(get<1>(output_stack.top())/*.second*/);
 		return {success, s.end()};
 	}
 
-	bool insert_concat_oper(stack<pair<edge, state_t>>& output_stack, stack<oper>& oper_stack) {
+	bool insert_concat_oper(output_stack_t& output_stack, stack<oper>& oper_stack) {
 		// insert a implicit concat operator
 		while(!oper_stack.empty() && priority(oper_stack.top()) >= priority(oper::concat)) {
 			if(!reduce(output_stack, oper_stack.top())) return false;
@@ -603,48 +637,48 @@ struct regular_expression {
 
 	}
 
-	bool reduce(stack<pair<edge, state_t>>& output_stack, oper op, const pair<edge, state_t>& current_edge_state) {
+	bool reduce(output_stack_t& output_stack, oper op, const tuple<edge, state_t, complexity_t>& current_edge_state) {
 		switch(op) {
-		case oper::kleene: {  // *
+		case oper::kleene: {  // *, ψ(e*) = ψ(e) + 1
 			// unary operator
-			auto& [e, q] = current_edge_state;    
-			output.bind_transform(q, e);     // q -e->...> q
-			edge new_e {q};                  // new_e = -ε->
-			output_stack.emplace(new_e, q);  // -new_e-> q
+			auto& [e, q, psi] = current_edge_state;    
+			output.bind_transform(q, e);              // q -e->...> q
+			edge new_e {q};                           // new_e = -ε->
+			output_stack.emplace(new_e, q, psi + 1);  // -new_e-> q
 			break;
 		}
-		case oper::positive: { // +
+		case oper::positive: { // +, ψ(e+) = 2ψ(e)
 			// unary operator
-			auto& [e, q] = current_edge_state;
-			output.bind_transform(q, e);    // -e->...> q -e->...> q
-			output_stack.emplace(e, q);     // -e->...> q
+			auto& [e, q, psi] = current_edge_state;
+			output.bind_transform(q, e);             // -e->...> q -e->...> q
+			output_stack.emplace(e, q, 2 * psi);     // -e->...> q
 			break;
 		} 
-		case oper::optional: { // ?
+		case oper::optional: { // ?, ψ(e?) = ψ(e) + 2
 			// unary operator
-			auto& [e, q] = current_edge_state;
+			auto& [e, q, psi] = current_edge_state;
 			state_t new_q = output.new_state();
 			output.bind_transform(new_q, e);
 			output.bind_empty_transform(new_q, q);
 			edge new_e = {new_q};
-			output_stack.emplace(new_e, q);
+			output_stack.emplace(new_e, q, psi + 2);
 			break;
 		}
-		case oper::concat: {  // (concatnation)
+		case oper::concat: {  // (concatnation), ψ(e0 e1) = ψ(e0) + ψ(e1)
 			if(output_stack.empty()) return false;
 			// binary operator
-			auto [e0, q0] = output_stack.top();
-			auto& [e1, q1] = current_edge_state;
+			auto [e0, q0, psi0] = output_stack.top();
+			auto& [e1, q1, psi1] = current_edge_state;
 			output_stack.pop();
-			output.bind_transform(q0, e1);   // q0 -e1->...> q1
-			output_stack.emplace(e0, q1);    // -e0->...> q0 -e1->...> q1
+			output.bind_transform(q0, e1);                // q0 -e1->...> q1
+			output_stack.emplace(e0, q1, psi0 + psi1);    // -e0->...> q0 -e1->...> q1
 			break;
 		}
-		case oper::select: { // |
+		case oper::select: { // |, ψ(e0 | e1) = ψ(e0) + ψ(e1) + 3  
 			if(output_stack.empty()) return false;
 			// binary operator
-			auto [e0, q0] = output_stack.top();
-			auto& [e1, q1] = current_edge_state;
+			auto [e0, q0, psi0] = output_stack.top();
+			auto& [e1, q1, psi1] = current_edge_state;
 			output_stack.pop();
 			state_t new_q = output.new_state();
 			output.bind_empty_transform(q0, new_q);  // q0 -ε-> new_q
@@ -653,7 +687,7 @@ struct regular_expression {
 			output.bind_transform(new_q2, e0);       // new_q2 -e0->...> q0
 			output.bind_transform(new_q2, e1);       // new_q2 -e1->...> q1
 			edge new_e = {new_q2};                   // new_e = -ε->
-			output_stack.emplace(new_e, new_q);      // -new_e-> new_q2 -{-e0->...> q0, -e1->...> q1}-> new_q
+			output_stack.emplace(new_e, new_q, psi0 + psi1 + 3);      // -new_e-> new_q2 -{-e0->...> q0, -e1->...> q1}-> new_q
 			break;
 		}
 		default: {
@@ -662,44 +696,50 @@ struct regular_expression {
 		}
 		return true;
 	}
-	bool reduce(stack<pair<edge, state_t>>& output_stack, oper op) {
+	bool reduce(output_stack_t& output_stack, oper op) {
 		if(output_stack.empty()) return false;
 		auto top = output_stack.top();
 		output_stack.pop();
 		return reduce(output_stack, op, top);
 	}
-	void reduce_breaket(stack<pair<edge, state_t>>& output_stack, vector<edge>& edges) {
+	void reduce_breaket(output_stack_t& output_stack, vector<edge>& edges) {
 		if(edges.empty()) {
 			// []
 			state_t new_q = output.new_state();
 			// -x-> new_q
 			// always not accept
-			output_stack.emplace(edge{edge::range_category::none, new_q}, new_q);
-		}
-		// [r1...rn]
-		state_t new_q1 = output.new_state(), 
-		        new_q2 = output.new_state();
-		edge new_e = {new_q1}; // new_e: -ε-> new_q1
-		// -ε-> new_q1 -{e1, e2, ...en}-> new_q2
-		for(auto& e: edges) 
-			output.bind_transform(new_q1, e.set_target(new_q2));
+			output_stack.emplace(edge{edge::range_category::none, new_q}, new_q, 1);
+		}else if(edges.size() == 1) {
+			// [r] == r
+			state_t new_q = output.new_state();
+			// ---> new_q
+			output_stack.emplace(edges[0].set_target(new_q), new_q, 1);
+		}else {
+			// [R1...Rn]
+			state_t new_q1 = output.new_state(), 
+			        new_q2 = output.new_state();
+			edge new_e = {new_q1}; // new_e: -ε-> new_q1
+			// -ε-> new_q1 -{e1, e2, ...en}-> new_q2
+			for(auto& e: edges) 
+				output.bind_transform(new_q1, e.set_target(new_q2));
 
-		output_stack.emplace(new_e, new_q2);
+			output_stack.emplace(new_e, new_q2, edges.size() + 1);
+		}
 	}
-	void reduce_breaket_invert(stack<pair<edge, state_t>>& output_stack, vector<edge>& edges) {
+	void reduce_breaket_invert(output_stack_t& output_stack, vector<edge>& edges) {
 		if(edges.empty()) {
 			// [^]
 			state_t new_q = output.new_state();
 			// ---> new_q
 			// always accept
-			output_stack.emplace(edge{edge::range_category::all, new_q}, new_q);
+			output_stack.emplace(edge{edge::range_category::all, new_q}, new_q, 1);
 		}else if(edges.size() == 1) {
 			// [^r]
 			state_t new_q = output.new_state();
 			// -^e-> new_q
-			output_stack.emplace(edges[0].invert().set_target(new_q), new_q);
+			output_stack.emplace(edges[0].invert().set_target(new_q), new_q, 1);
 		}else {
-			// [^r1...rn]
+			// [^R1...Rn]
 			state_t new_q1 = output.new_state(), 
 			        new_q2 = output.new_state();
 			edge new_e = {new_q1}; // new_e: -ε-> new_q1
@@ -708,7 +748,7 @@ struct regular_expression {
 			for(auto& e: edges) 
 				output.bind_transform(new_q1, e.invert().set_target(new_q2));
 
-			output_stack.emplace(new_e, new_q2);
+			output_stack.emplace(new_e, new_q2, edges.size() + 2);
 
 		}
 
