@@ -5,12 +5,12 @@
 	Supported Grammer:
 	concat
 	select            | 
-	brace             ()
+	parens            ()
 	kleene closure    *
 	positive closure  +
 	optional          ?
 	wildcard          .
-	breaket           [...], [^...]
+	brackets          [...], [^...]
 
 */
 
@@ -361,8 +361,8 @@ struct regular_expression {
 		success = 0,
 		empty_operand, 
 		bad_escape, 
-		missing_brace,
-		bad_breaket_expression
+		missing_paren,
+		bad_bracket_expression
 	};
 
 	enum class oper {
@@ -372,11 +372,11 @@ struct regular_expression {
 		optional,      // ?
 		concat,        // (concatnation)
 		select,        // |
-		lbrace,        // (
-		rbrace,        // ) the priority of right-brace is meanless
+		lparen,        // (
+		rparen,        // ) the priority of right-paren is meanless
 		wildcard,      // . the priority of wildcard is meanless
-		breaket,       // [chars...]
-		breaket_invert // [^chars...]
+		brackets,       // [chars...]
+		brackets_invert // [^chars...]
 	};
 
 	static constexpr int priority(oper op) noexcept{
@@ -384,12 +384,12 @@ struct regular_expression {
 		case oper::kleene   : 
 		case oper::positive :
 		case oper::optional : 
-		case oper::breaket  :
-		case oper::breaket_invert: 
+		case oper::brackets  :
+		case oper::brackets_invert: 
 			return 0;
 		case oper::concat   : return -1;
 		case oper::select   : return -2;
-		case oper::lbrace   : return -3;
+		case oper::lparen   : return -3;
 		default: return -114514;
 		}
 	}
@@ -399,8 +399,8 @@ struct regular_expression {
 		case '+': return oper::positive;
 		case '?': return oper::optional;
 		case '|': return oper::select;
-		case '(': return oper::lbrace;
-		case ')': return oper::rbrace;
+		case '(': return oper::lparen;
+		case ')': return oper::rparen;
 		case '.': return oper::wildcard;
 		default: return oper(-1);
 		}
@@ -457,40 +457,45 @@ struct regular_expression {
 				if(has_potential_concat_oper && !insert_concat_oper(output_stack, oper_stack)) {
 					return {empty_operand, pos};
 				}
-				oper_stack.push(oper::lbrace);
+				oper_stack.push(oper::lparen);
 				++pos;
 				has_potential_concat_oper = false;
 				break;
 			case ')':
-				while(!oper_stack.empty() && oper_stack.top() != oper::lbrace) {
+				while(!oper_stack.empty() && oper_stack.top() != oper::lparen) {
 					if(!reduce(output_stack, oper_stack.top())) {
 						return {empty_operand, pos};
 					}
 					oper_stack.pop();
 				}
 				if(oper_stack.empty()) {
-					// error: missing left brace '('
-					return {missing_brace, pos};
+					// error: missing left paren '('
+					return {missing_paren, pos};
 				}
-				oper_stack.pop(); // pop out left brace (
+				oper_stack.pop(); // pop out left paren (
 				++pos;
 				has_potential_concat_oper = true;
 				break;
 			case '[': {
-				// [c...] breaket expression
-				if(++pos == s.end()) return {bad_breaket_expression, pos};
+				// [c...] bracket expression
+				if(++pos == s.end()) return {bad_bracket_expression, pos};
 				bool invert_range = false;
 				if(*pos == '^') {
 					invert_range = true;
 					++pos;
 				}
-				if(auto breaket_res = parse_breaket(pos, s.end()); breaket_res.has_value()) {
-					if(!invert_range) reduce_breaket(output_stack, breaket_res.value());
-					else              reduce_breaket_invert(output_stack, breaket_res.value()); 
-				}else return {bad_breaket_expression, pos};
+				if(auto brackets_res = parse_brackets(pos, s.end()); brackets_res.has_value()) {
+					if(!invert_range) reduce_brackets(output_stack, brackets_res.value());
+					else              reduce_brackets_invert(output_stack, brackets_res.value()); 
+				}else return {bad_bracket_expression, pos};
 				
 				has_potential_concat_oper = true;
 				break;
+			}
+			case '{': {
+				// {m}, {m,}, {m,n} counted repetition expression
+
+				break;	
 			}
 			default: {
 				// is character(s)/wildcard
@@ -528,9 +533,9 @@ struct regular_expression {
 		}
 		// clear stacks
 		while(!oper_stack.empty()) {
-			if(oper_stack.top() == oper::lbrace) {
-				// missing right brace ')'
-				return {missing_brace, s.end()};
+			if(oper_stack.top() == oper::lparen) {
+				// missing right paren ')'
+				return {missing_paren, s.end()};
 			}else if(!reduce(output_stack, oper_stack.top())) {
 				
 				return {empty_operand, s.end()};			
@@ -599,7 +604,7 @@ struct regular_expression {
 		case 't': return {'\t'};
 		case 'v': return {'\v'};
 		case '0': return {'\0'};
-		case 'b': return {'\b'}; // backspace // TODO: this works only when in breaket expression.
+		case 'b': return {'\b'}; // backspace // TODO: this works only when in bracket expression.
 		case 'c': {
 			if(pos != end) {
 				return { char_t(*pos++ % 32) };
@@ -702,7 +707,7 @@ struct regular_expression {
 		output_stack.pop();
 		return reduce(output_stack, op, top);
 	}
-	void reduce_breaket(output_stack_t& output_stack, vector<edge>& edges) {
+	void reduce_brackets(output_stack_t& output_stack, vector<edge>& edges) {
 		if(edges.empty()) {
 			// []
 			state_t new_q = output.new_state();
@@ -726,7 +731,7 @@ struct regular_expression {
 			output_stack.emplace(new_e, new_q2, edges.size() + 1);
 		}
 	}
-	void reduce_breaket_invert(output_stack_t& output_stack, vector<edge>& edges) {
+	void reduce_brackets_invert(output_stack_t& output_stack, vector<edge>& edges) {
 		if(edges.empty()) {
 			// [^]
 			state_t new_q = output.new_state();
@@ -754,8 +759,8 @@ struct regular_expression {
 
 	}
 
-	optional<vector<edge>> parse_breaket(typename string_view_t::const_iterator& pos, const typename string_view_t::const_iterator& end) {
-		// assume pos is pointing at the first char after the left square breaket '[' and possible invert char '^' 
+	optional<vector<edge>> parse_brackets(typename string_view_t::const_iterator& pos, const typename string_view_t::const_iterator& end) {
+		// assume pos is pointing at the first char after the left square bracket '[' and possible invert char '^' 
 
 
 		vector<edge> edges;
