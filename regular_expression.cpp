@@ -17,6 +17,7 @@
 #include <map>
 #include <set>
 #include <stack>
+#include <queue>
 #include <vector>
 #include <string>
 #include <limits>
@@ -37,15 +38,20 @@ using std::get;
 using std::pair;
 using std::swap;
 using std::tuple;
+using std::queue;
 using std::stack;
 using std::size_t;
 using std::string;
 using std::vector;
 using std::optional;
 using std::in_place;
+using std::string_view;
 using std::basic_string;
 using std::numeric_limits;
 using std::basic_string_view;
+
+template <typename CharT>
+constexpr bool in_range(CharT a, CharT b, CharT x) noexcept{ return a <= x && x <= b; }
 
 template <typename CharT>
 struct non_determinstic_automaton {
@@ -64,7 +70,7 @@ struct non_determinstic_automaton {
 
 		char_t from, to;
 		enum range_category: char {
-			epsilon = 0,     // empty edge
+			epsilon     = 0, // empty edge
 			single_char = 1, // range of one char [from]
 			range       = 2, // range: [from-to]
 			spaces      = 3, // space chars: [\f\n\r\t\v]
@@ -96,9 +102,9 @@ struct non_determinstic_automaton {
 		edge(range_category category_, state_t target = -1) noexcept: category{category_}, target_state{target} {}
 		edge(char_t c, bool invert_range_ = false, state_t target = -1) noexcept: category{invert_range_ ? range_category::invert_single_char : range_category::single_char}, from{c}, target_state{target} {}
 		edge(char_t from_, char_t to_, bool invert_range_ = false, state_t target = -1) noexcept: category{invert_range_ ? range_category::invert_range : range_category::range}, from{from_}, to{to_}, target_state{target} {}
+		edge(const edge& other, state_t target) noexcept: from{other.from}, to{other.to}, category{other.category}, target_state{target} {}
+		edge(const edge&) noexcept = default;
 
-
-		static constexpr bool in_range(char_t a, char_t b, char_t x) noexcept{ return a <= x && x <= b; }
 		bool accept(char_t c) const noexcept{
 			switch(category) {
 			case range_category::epsilon: 
@@ -143,97 +149,97 @@ struct non_determinstic_automaton {
 				return false;
 			}
 
-	}
-	bool accept_epsilon() const noexcept{
-		return category == range_category::epsilon;
-	}
-	edge& set_target(state_t index) noexcept{
-		target_state = index;
-		return *this;
-	}
+		}
+		bool accept_epsilon() const noexcept{
+			return category == range_category::epsilon;
+		}
+		edge& set_target(state_t index) noexcept{
+			target_state = index;
+			return *this;
+		}
 
-	edge& set_range(char_t from_, char_t to_, bool invert_range_ = false) noexcept{
-		from = from_;
-		to = to_;
-		category = invert_range_ ? range_category::invert_range : range_category::range;
-		return *this;
-	}
-	edge& set_range(char_t c, bool invert_range_ = false) noexcept{
-		from = c;
-		category = invert_range_ ? range_category::invert_single_char : range_category::single_char;
-		return *this;
-	}
-	edge& set_range(range_category category_) noexcept{
-		category = category_;
-		return *this;
-	}
+		edge& set_range(char_t from_, char_t to_, bool invert_range_ = false) noexcept{
+			from = from_;
+			to = to_;
+			category = invert_range_ ? range_category::invert_range : range_category::range;
+			return *this;
+		}
+		edge& set_range(char_t c, bool invert_range_ = false) noexcept{
+			from = c;
+			category = invert_range_ ? range_category::invert_single_char : range_category::single_char;
+			return *this;
+		}
+		edge& set_range(range_category category_) noexcept{
+			category = category_;
+			return *this;
+		}
 
 
-	edge& invert() noexcept{
-		category = range_category(-category);
-		return *this;	
-	}
-	bool is_single_char() const noexcept{
-		return category == range_category::single_char;
-	}
-	bool is_conjunction_range() const noexcept{
-		return category == range_category::conjunction_range;
-	}
-}; 
+		edge& invert() noexcept{
+			category = range_category(-category);
+			return *this;	
+		}
+		bool is_single_char() const noexcept{
+			return category == range_category::single_char;
+		}
+		bool is_conjunction_range() const noexcept{
+			return category == range_category::conjunction_range;
+		}
+	}; // struct edge
 
 	// δ: Q * (Σ ∪ {ε}) -> 2^Q
-struct transform_t {
+	struct transform_t {
 
-	// accept (q, {c-spaces}) -> {q-spaces}
-	vector<vector<edge>> m;
+		// accept (q, {c-spaces}) -> {q-spaces}
+		vector<vector<edge>> m;
 
-	state_set_t& do_epsilon_closure(state_set_t& current_states) const{
-			// do ε-closure(current_states) and assign to itself
-		state_set_t current_appended_states = current_states, 
-		               next_appended_states;
-		while(true) {
-			for(auto q: current_appended_states) {
-				for(const auto& r: m[q]) {
-					if(r.accept_epsilon() && current_states.count(r.target_state) == 0) {
-						next_appended_states.insert(r.target_state);
+		state_set_t& do_epsilon_closure(state_set_t& current_states) const{
+				// do ε-closure(current_states) and assign to itself
+			state_set_t current_appended_states = current_states, 
+			               next_appended_states;
+			while(true) {
+				for(auto q: current_appended_states) {
+					for(const auto& r: m[q]) {
+						if(r.accept_epsilon() && current_states.count(r.target_state) == 0) {
+							next_appended_states.insert(r.target_state);
+						}
+					}
+				}
+				if(next_appended_states.empty()) return current_states;
+
+				current_states.insert(next_appended_states.begin(), next_appended_states.end());
+				current_appended_states = std::move(next_appended_states);
+				next_appended_states.clear();
+			}
+		}
+
+		state_set_t operator()(const state_set_t& current_states, char_t c) const{
+				// assume ε-closure(current_states) == current_states
+
+			if(current_states.empty()) return {};
+			state_set_t new_states;
+
+			for(auto q: current_states) {
+				// for each protential current state
+				if(m[q].empty()) continue;
+				else if(m[q][0].is_conjunction_range()) {
+					// this state and its edges are conjunction
+					// c is accepted only when all of the edges are accepted 
+					for(auto it = ++m[q].cbegin(); it != m[q].cend(); ++it)
+						if(!it->accept(c)) goto next_state;
+					new_states.insert(m[q][0].target_state);
+					next_state:;
+				}else {
+					for(const auto& r: m[q]) {
+						// for each range
+						if(r.accept(c)) new_states.insert(r.target_state);
 					}
 				}
 			}
-			if(next_appended_states.empty()) return current_states;
-
-			current_states.insert(next_appended_states.begin(), next_appended_states.end());
-			current_appended_states = std::move(next_appended_states);
-			next_appended_states.clear();
+			return do_epsilon_closure(new_states);
 		}
-	}
 
-	state_set_t operator()(const state_set_t& current_states, char_t c) const{
-			// assume ε-closure(current_states) == current_states
-
-		if(current_states.empty()) return {};
-		state_set_t new_states;
-
-		for(auto q: current_states) {
-			// for each protential current state
-			if(m[q].empty()) continue;
-			else if(m[q][0].is_conjunction_range()) {
-				// this state and its edges are conjunction
-				// c is accepted only when all of the edges are accepted 
-				for(auto it = ++m[q].cbegin(); it != m[q].cend(); ++it)
-					if(!it->accept(c)) goto next_state;
-				new_states.insert(m[q][0].target_state);
-				next_state:;
-			}else {
-				for(const auto& r: m[q]) {
-					// for each range
-					if(r.accept(c)) new_states.insert(r.target_state);
-				}
-			}
-		}
-		return do_epsilon_closure(new_states);
-	}
-
-};
+	}; // struct transform_t
 
 	using final_state_set_t = state_set_t; // F: is a subset of Q
 
@@ -261,6 +267,10 @@ public:
 		delta.m.emplace_back();
 		return ++max_state_index;
 	}
+	state_t new_state(const vector<edge>& edges) {
+		delta.m.emplace_back(edges);
+		return ++max_state_index;
+	}
 
 	void mark_final_state(state_t index) {
 		F.insert(index);
@@ -269,7 +279,7 @@ public:
 	bool bind_transform(state_t index, state_t target_index, const edge& e) {
 		if(index > max_state_index or target_index > max_state_index) return false;
 
-		delta.m[index].push_back(e.set_target(target_index)); // reset reset
+		delta.m[index].push_back(e.set_target(target_index)); // reset target
 		return true;
 	}
 	bool bind_transform(state_t index, const edge& e) {
@@ -282,6 +292,78 @@ public:
 		if(index > max_state_index or target_index > max_state_index) return false;
 		delta.m[index].emplace_back(target_index);
 		return true;
+	}
+
+	tuple<edge, state_t> copy_sub_expression(edge e, state_t q) {
+		// deep copy the sub expression from edge e to state q
+		// assume e and q is valid
+		// traverse the directed graph  -e-> ... > q
+
+		edge e_copy {e, new_state()};
+		if(e.target_state == q) {
+			// delta.m.emplace_back();
+			for(auto& edge_from_q: delta.m[q]) {
+				if(edge_from_q.target_state == q) 
+					delta.m[e_copy.target_state].emplace_back(edge_from_q, e_copy.target_state);
+			}
+			return {e_copy, e_copy.target_state};
+		}
+
+		// delta.m.emplace_back(delta.m[e.target_state]); // index is e_copy.target_state
+		delta.m[e_copy.target_state] = delta.m[e.target_state];
+
+		map<state_t, state_t> memo{{e.target_state, e_copy.target_state}}; // [src_state_index] -> [copy_state_index]
+		queue<state_t> que; 
+		que.emplace(e_copy.target_state);
+		state_t q_copy;
+		while(!que.empty()) {
+			auto copy = que.front();
+			que.pop();
+			
+			// replace the target states
+			for(auto& edge_from_copy: delta.m[copy]) {
+				if(auto it = memo.find(edge_from_copy.target_state); it != memo.end()) {
+					// don't need to create new state
+					edge_from_copy.set_target(get<1>(*it));
+				}else {
+					// create new state
+					state_t new_target = new_state(delta.m[edge_from_copy.target_state]);
+					// delta.m.emplace_back(delta.m[edge_from_copy.target_state]); // index is new_target
+					// delta.m[new_target] = delta.m[edge_from_copy.target_state];
+					memo[edge_from_copy.target_state] = new_target; // register memo
+					if(edge_from_copy.target_state != q)  // the edge list of the last state q should be copy at the end
+						que.emplace(new_target);
+					else 
+						q_copy = new_target;
+					edge_from_copy.set_target(new_target); // reset target
+				}
+			}
+		}
+		// copy the last state q
+		// remove-erase idiom, note that the order of the edges are not important
+		auto forward =   delta.m[q_copy].begin(),
+		    backward = --delta.m[q_copy].end();
+		while(forward != delta.m[q_copy].end()) {
+			if(auto forward_res = memo.find(forward->target_state); forward_res != memo.end()) {
+				forward->set_target(get<1>(*forward_res));
+				++forward;
+			}else {
+				while(backward != forward) {
+					if(auto backward_res = memo.find(backward->target_state); backward_res != memo.end()) {
+						(*forward = *backward).set_target(get<1>(*backward_res));
+						--backward;
+						goto next_forward;
+					}else --backward;
+				}
+				// backward == forward
+				break;
+				next_forward:
+				++forward;
+			}
+		}
+		delta.m[q_copy].erase(forward, delta.m[q_copy].end());
+		
+		return {e_copy, q_copy};
 	}
 
 	bool execute(string_view_t target, state_set_t start_states = {0}) const{
@@ -305,7 +387,7 @@ public:
 
 		return delta(delta.do_epsilon_closure(start_states), c);
 	}
-};
+}; // struct non_determinstic_automaton
 
 template <typename CharT>
 using nfa = non_determinstic_automaton<CharT>;
@@ -331,11 +413,11 @@ struct regular_expression {
 			e1 | e2      : ψ(e) = ψ(e1) + ψ(e2) + 3
 			e1 e2        : ψ(e) = ψ(e1) + ψ(e2)
 			e1*          : ψ(e) = ψ(e1) + 1
-			e1+          : ψ(e) = ψ(e1) + 2
+			e1+          : ψ(e) = 2ψ(e1)
 			e1?          : ψ(e) = ψ(e1) + 2
 			e1{m}        : ψ(e) = mψ(e)
-			e1{m,}       : ψ(e) = (m + 1)ψ(e) + 1
-			e1{m,n}      : ψ(e) = nψ(e) + 2(n - m)
+			e1{m,}       : ψ(e) = (m + 1)ψ(e)
+			e1{m,n}      : ψ(e) = nψ(e) + (n - m)
 
 		if ψ(e) <= max_unroll_complexity: 
 			using trivial unroll algorithm: 
@@ -362,21 +444,24 @@ struct regular_expression {
 		empty_operand, 
 		bad_escape, 
 		missing_paren,
-		bad_bracket_expression
+		bad_bracket_expression,
+		bad_brace_expression,
+		expensive_brace_expression_unroll
 	};
 
 	enum class oper {
 		// enum value represents the priority of the operators
-		kleene,        // *
-		positive,      // +
-		optional,      // ?
-		concat,        // (concatnation)
-		select,        // |
-		lparen,        // (
-		rparen,        // ) the priority of right-paren is meanless
-		wildcard,      // . the priority of wildcard is meanless
-		brackets,       // [chars...]
-		brackets_invert // [^chars...]
+		kleene,          // *
+		positive,        // +
+		optional,        // ?
+		concat,          // (concatnation)
+		select,          // |
+		lparen,          // (
+		rparen,          // ) the priority of right-paren is meanless
+		wildcard,        // . the priority of wildcard is meanless
+		brackets,        // [chars...]
+		brackets_invert, // [^chars...]
+		braces           // {m}, {m,}, {m,n}
 	};
 
 	static constexpr int priority(oper op) noexcept{
@@ -384,8 +469,9 @@ struct regular_expression {
 		case oper::kleene   : 
 		case oper::positive :
 		case oper::optional : 
-		case oper::brackets  :
-		case oper::brackets_invert: 
+		case oper::brackets :
+		case oper::brackets_invert:
+		case oper::braces   :  
 			return 0;
 		case oper::concat   : return -1;
 		case oper::select   : return -2;
@@ -404,6 +490,18 @@ struct regular_expression {
 		case '.': return oper::wildcard;
 		default: return oper(-1);
 		}
+	}
+	static constexpr string_view error_message(error_category category) noexcept{
+		switch(category) {
+		case success:                return "successed";
+		case empty_operand:          return "empty operand";
+		case bad_escape:             return "bad escape";
+		case missing_paren:          return "missing parentheses";
+		case bad_bracket_expression: return "bad bracket expression";
+		case bad_brace_expression:   return "bad brace expression";
+		case expensive_brace_expression_unroll: return "brace expression is too complex to unroll";
+		}
+		return "";
 	}
 
 	pair<error_category, const char_t*> parse(string_view_t s) {
@@ -485,6 +583,8 @@ struct regular_expression {
 					++pos;
 				}
 				if(auto brackets_res = parse_brackets(pos, s.end()); brackets_res.has_value()) {
+					if(has_potential_concat_oper && !insert_concat_oper(output_stack, oper_stack)) return {empty_operand, pos};
+
 					if(!invert_range) reduce_brackets(output_stack, brackets_res.value());
 					else              reduce_brackets_invert(output_stack, brackets_res.value()); 
 				}else return {bad_bracket_expression, pos};
@@ -493,9 +593,15 @@ struct regular_expression {
 				break;
 			}
 			case '{': {
-				// {m}, {m,}, {m,n} counted repetition expression
-
-				break;	
+				// {m}, {m,}, {m,n}  counted repetition expression
+				auto braces_res = parse_braces(++pos, s.end());
+				// get<0>(brace_res) is braces_case
+				if(get<0>(braces_res) == 0) 
+					return {bad_brace_expression, pos};
+				if(!reduce_braces(output_stack, braces_res)) 
+					return {expensive_brace_expression_unroll, pos};
+				has_potential_concat_oper = true;
+				break;
 			}
 			default: {
 				// is character(s)/wildcard
@@ -756,12 +862,87 @@ struct regular_expression {
 			output_stack.emplace(new_e, new_q2, edges.size() + 2);
 
 		}
+	}
+
+	bool reduce_braces(output_stack_t& output_stack, const tuple<int, size_t, size_t>& braces_res) {
+		if(get<2>(output_stack.top()) <= max_unroll_complexity) {
+			// psi <= max_unroll_complexity
+			unroll_brace_expression(output_stack, braces_res);
+			return true;
+		}else {
+			// TODO: implements counted repetition loop
+			return false; 
+		}
+	}
+
+	void unroll_brace_expression(output_stack_t& output_stack, const tuple<int, size_t, size_t>& braces_res) {
+		// trivial algorithm:
+		// e{m}   -> e...e            m times e
+		// e{m,}  -> e...e+           m times e
+		// e{m,n} -> e...e(e?)...(e?) m times e and n-m times (e?)
+		auto [e, q, psi] = output_stack.top();
+		output_stack.pop();
+		auto [brace_case, m, n] = braces_res;
+		switch(brace_case) {
+		case 3: // e{m,n}
+			if(m != n) {
+				state_t current_q = q;
+				for(size_t i = 0; i < m - 1; ++i) {
+					auto [new_e, new_q] = output.copy_sub_expression(e, q);
+					output.bind_transform(current_q, new_e);
+					current_q = new_q;
+				}
+				state_t final_q = output.new_state();
+				output.bind_empty_transform(current_q, final_q);
+				for(size_t i = 0; i < n - m; ++i) {
+					auto [new_e, new_q] = output.copy_sub_expression(e, q);
+					output.bind_transform(current_q, new_e);
+					output.bind_empty_transform(current_q, final_q);
+					current_q = new_q;
+				}
+				output_stack.emplace(e, final_q, n * psi + n - m);
+				break;
+			} 
+			// else m == n: e{m,m} = e{m}
+			[[fallthrough]];
+		case 1: // e{m}
+			if(m == 0) {
+				// e{0} == ε
+				// simply ignore the edge e 
+				output_stack.emplace(edge{q}, q, 1); // -ε-> q
+			}else {
+				state_t current_q = q;
+				for(size_t i = 0; i < m - 1; ++i) {
+					auto [new_e, new_q] = output.copy_sub_expression(e, q);
+					output.bind_transform(current_q, new_e);
+					current_q = new_q;
+				}
+				output_stack.emplace(e, current_q, psi * m);
+			}
+			break;
+		case 2: // e{m,}
+			if(m == 0) {
+				// e{0,} == e*
+				output.bind_transform(q, e);                // q -e->...> q
+				output_stack.emplace(edge{q}, q, psi + 1);  // -ε-> q
+			}else {
+				// e{m,} == e ... e+ 
+				state_t current_q = q;
+				for(size_t i = 0; i < m - 1; ++i) {
+					auto [new_e, new_q] = output.copy_sub_expression(e, q);
+					output.bind_transform(current_q, new_e);
+					current_q = new_q;
+				}
+				output.bind_transform(current_q, edge{e, current_q});
+				output_stack.emplace(e, current_q, (m + 1) * psi);
+			}
+			break;
+		}
 
 	}
 
 	optional<vector<edge>> parse_brackets(typename string_view_t::const_iterator& pos, const typename string_view_t::const_iterator& end) {
 		// assume pos is pointing at the first char after the left square bracket '[' and possible invert char '^' 
-
 
 		vector<edge> edges;
 		enum {
@@ -822,6 +1003,53 @@ struct regular_expression {
 		++pos;
 		return edges;
 	}
+
+	// tuple<braces_case, upper, downer>
+	tuple<int, size_t, size_t> parse_braces(typename string_view_t::const_iterator& pos, const typename string_view_t::const_iterator& end) {
+		//              err, {m}, {m, }, {m, n}
+		// braces_case: 0,   1,   2,     3 
+		// m, n ::= [0-9]+
+		auto lex_digits = [end](auto& p) {
+			size_t n = 0;
+			do{ n = n * 10 + size_t(*p++ - '0'); }while(p != end && in_range('0', '9', *p));
+			return n;
+		};
+
+		int parse_stete = 0;
+		size_t m, n = 0;
+		while(pos != end && *pos != '}') {
+			// if(*pos == ' ') {++pos; continue;} // spaces are not allowed
+			switch(parse_stete) {
+			case 0: 
+				// lex the first arg: m
+				if(in_range('0', '9', *pos)) {
+					m = lex_digits(pos);
+					++parse_stete;
+				}else return {0, 0, 0}; // bad expression
+				break;
+			case 1:
+				// lex comma: ,
+				if(*pos != ',') return {0, 0, 0}; // bad expression
+				++pos;
+				++parse_stete;
+				break;
+			case 2:
+				// lex the next arg: n
+				if(in_range('0', '9', *pos)) {
+					if(n = lex_digits(pos); m > n) return {0, 0, 0}; // {m, n}, m > n
+					++parse_stete;
+				}else return {0, 0, 0};// bad expression
+				break;
+			default:
+				return {0, 0, 0}; // bad expression
+			}
+		}
+		if(pos == end) return {0, 0, 0};
+		// finished lexing braces expression
+		++pos;
+		return {parse_stete, m, n};
+	}
+
 private:
 
 	static constexpr int hex_val(char_t x) noexcept{
@@ -846,7 +1074,7 @@ int main(int argc, const char** argv) {
 	fmt::print("pattern: {}\n", argv[1]);
 	regular_expression<char> re;
 	auto [parse_result, pos] = re.parse(argv[1]);
-	fmt::print("pattern result: {}\n", parse_result);
+	fmt::print("pattern result: {}\n", re.error_message(parse_result));
 	while(true) {
 		string target;
 		fmt::print("input a target string:\n");

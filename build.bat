@@ -2,7 +2,7 @@
 
 set target="regular_expression"
 
-g++ %target%.cpp -o %target%.exe -Og -g -I"D:/raiscies/repo/c++/libraries/fmt/include/" -L"D:/Raiscies/repo/C++/libraries/fmt/build/" -l:"libfmt.a" -Wl,-Bstatic -lpthread -Wl,-Bdynamic
+g++ %target%.cpp -o %target%.exe -O0 -g -I"D:/raiscies/repo/c++/libraries/fmt/include/" -L"D:/Raiscies/repo/C++/libraries/fmt/build/" -l:"libfmt.a" -Wl,-Bstatic -lpthread -Wl,-Bdynamic
 
 rem strip %target%.exe
 
