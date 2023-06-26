@@ -11,6 +11,7 @@
 	optional          ?
 	wildcard          .
 	brackets          [...], [^...]
+	braces            {m} {m,} {m,n}
 
 */
 
@@ -328,8 +329,6 @@ public:
 				}else {
 					// create new state
 					state_t new_target = new_state(delta.m[edge_from_copy.target_state]);
-					// delta.m.emplace_back(delta.m[edge_from_copy.target_state]); // index is new_target
-					// delta.m[new_target] = delta.m[edge_from_copy.target_state];
 					memo[edge_from_copy.target_state] = new_target; // register memo
 					if(edge_from_copy.target_state != q)  // the edge list of the last state q should be copy at the end
 						que.emplace(new_target);
@@ -392,7 +391,7 @@ public:
 template <typename CharT>
 using nfa = non_determinstic_automaton<CharT>;
 
-template <typename CharT, size_t max_unroll_complexity_ = 500>
+template <typename CharT, size_t max_unroll_complexity_ = 2000>
 struct regular_expression {
 	using char_t = CharT;
 	using string_t = basic_string<char_t>;
@@ -865,42 +864,58 @@ struct regular_expression {
 	}
 
 	bool reduce_braces(output_stack_t& output_stack, const tuple<int, size_t, size_t>& braces_res) {
-		if(get<2>(output_stack.top()) <= max_unroll_complexity) {
-			// psi <= max_unroll_complexity
-			unroll_brace_expression(output_stack, braces_res);
+		if(try_unroll_brace_expression(output_stack, braces_res)) {
 			return true;
-		}else {
-			// TODO: implements counted repetition loop
-			return false; 
 		}
+		// TODO: implements counted repetition loop
+		return false; 
 	}
 
-	void unroll_brace_expression(output_stack_t& output_stack, const tuple<int, size_t, size_t>& braces_res) {
+	bool try_unroll_brace_expression(output_stack_t& output_stack, const tuple<int, size_t, size_t>& braces_res) {
 		// trivial algorithm:
 		// e{m}   -> e...e            m times e
 		// e{m,}  -> e...e+           m times e
 		// e{m,n} -> e...e(e?)...(e?) m times e and n-m times (e?)
 		auto [e, q, psi] = output_stack.top();
-		output_stack.pop();
+		complexity_t new_psi;
+		// output_stack.pop();
 		auto [brace_case, m, n] = braces_res;
 		switch(brace_case) {
 		case 3: // e{m,n}
 			if(m != n) {
+				new_psi = n * psi + n - m;
+				if(new_psi > max_unroll_complexity) return false;
+				output_stack.pop();
+
 				state_t current_q = q;
-				for(size_t i = 0; i < m - 1; ++i) {
-					auto [new_e, new_q] = output.copy_sub_expression(e, q);
-					output.bind_transform(current_q, new_e);
-					current_q = new_q;
-				}
 				state_t final_q = output.new_state();
-				output.bind_empty_transform(current_q, final_q);
-				for(size_t i = 0; i < n - m; ++i) {
-					auto [new_e, new_q] = output.copy_sub_expression(e, q);
-					output.bind_transform(current_q, new_e);
+				if(m != 0) {
+					for(size_t i = 0; i <= m - 1; ++i) { // loop m - 1 times
+						auto [new_e, new_q] = output.copy_sub_expression(e, q);
+						output.bind_transform(current_q, new_e);
+						current_q = new_q;
+					}
 					output.bind_empty_transform(current_q, final_q);
-					current_q = new_q;
+					for(size_t i = 0; i < n - m; ++i) {
+						auto [new_e, new_q] = output.copy_sub_expression(e, q);
+						output.bind_transform(current_q, new_e);
+						output.bind_empty_transform(current_q, final_q);
+						current_q = new_q;
+					}
+				}else {
+					edge front_e = {output.new_state()};
+					output.bind_empty_transform(front_e.target_state, final_q);
+					output.bind_transform(front_e.target_state, e);
+					output.bind_empty_transform(current_q, final_q);
+					for(size_t i = 0; i < n - 1; ++i) { // n != m => n != 0
+						auto [new_e, new_q] = output.copy_sub_expression(e, q);
+						output.bind_transform(current_q, new_e);
+						output.bind_empty_transform(new_q, final_q);
+						current_q = new_q;
+					}
+					e = front_e;
 				}
-				output_stack.emplace(e, final_q, n * psi + n - m);
+				output_stack.emplace(e, final_q, new_psi);
 				break;
 			} 
 			// else m == n: e{m,m} = e{m}
@@ -909,24 +924,34 @@ struct regular_expression {
 			if(m == 0) {
 				// e{0} == ε
 				// simply ignore the edge e 
+				output_stack.pop();
 				output_stack.emplace(edge{q}, q, 1); // -ε-> q
 			}else {
+				new_psi = psi * m;
+				if(new_psi > max_unroll_complexity) return false;
+				output_stack.pop();
+
 				state_t current_q = q;
 				for(size_t i = 0; i < m - 1; ++i) {
 					auto [new_e, new_q] = output.copy_sub_expression(e, q);
 					output.bind_transform(current_q, new_e);
 					current_q = new_q;
 				}
-				output_stack.emplace(e, current_q, psi * m);
+				output_stack.emplace(e, current_q, new_psi);
 			}
 			break;
 		case 2: // e{m,}
 			if(m == 0) {
 				// e{0,} == e*
+				output_stack.pop();
 				output.bind_transform(q, e);                // q -e->...> q
 				output_stack.emplace(edge{q}, q, psi + 1);  // -ε-> q
 			}else {
-				// e{m,} == e ... e+ 
+				// e{m,} == e ... e+
+				new_psi = (m + 1) * psi;
+ 				if(new_psi > max_unroll_complexity) return false;
+				output_stack.pop();
+
 				state_t current_q = q;
 				for(size_t i = 0; i < m - 1; ++i) {
 					auto [new_e, new_q] = output.copy_sub_expression(e, q);
@@ -934,10 +959,11 @@ struct regular_expression {
 					current_q = new_q;
 				}
 				output.bind_transform(current_q, edge{e, current_q});
-				output_stack.emplace(e, current_q, (m + 1) * psi);
+				output_stack.emplace(e, current_q, new_psi);
 			}
 			break;
 		}
+		return true;
 
 	}
 
@@ -1075,6 +1101,7 @@ int main(int argc, const char** argv) {
 	regular_expression<char> re;
 	auto [parse_result, pos] = re.parse(argv[1]);
 	fmt::print("pattern result: {}\n", re.error_message(parse_result));
+	if(parse_result != regular_expression<char>::error_category::success) return 1;
 	while(true) {
 		string target;
 		fmt::print("input a target string:\n");
