@@ -80,7 +80,7 @@ struct non_determinstic_automaton {
 			newlines    = 6, // [\n\r](currently unused)
 			all         = 7, // any chars
 
-			conjunction_range = 8, // a flag to point out that the start state of this edge requires all of the edge it comes from is accepted (conjunction)
+			conjunction_range = 8, // a flag to mark the start state of this edge requires all of the edges it come from are accepted (conjunction)
 			
 			// invert ranges 
 			invert_single_char = -single_char,  // [^c]
@@ -109,7 +109,7 @@ struct non_determinstic_automaton {
 		bool accept(char_t c) const noexcept{
 			switch(category) {
 			case range_category::epsilon: 
-				return false;
+				return true; 
 			case range_category::single_char: // range of one char [from]
 				return c == from;
 			case range_category::range:       // range: [from-to]
@@ -407,16 +407,16 @@ struct regular_expression {
 		e = 
 			R or [] or [R] or [^] or [^R]   (R is a single range/edge)
 			             : ψ(e) = 1
-			[R1R2...Rn]  : ψ(e) = n + 1  (n > 1)
-			[^R1R2...Rn] : ψ(e) = n + 2  (n > 1)
+			[R1R2...Rn]  : ψ(e) = n + 1               (n > 1)
+			[^R1R2...Rn] : ψ(e) = n + 2               (n > 1)
 			e1 | e2      : ψ(e) = ψ(e1) + ψ(e2) + 3
 			e1 e2        : ψ(e) = ψ(e1) + ψ(e2)
 			e1*          : ψ(e) = ψ(e1) + 1
 			e1+          : ψ(e) = 2ψ(e1)
 			e1?          : ψ(e) = ψ(e1) + 2
-			e1{m}        : ψ(e) = mψ(e)
-			e1{m,}       : ψ(e) = (m + 1)ψ(e)
-			e1{m,n}      : ψ(e) = nψ(e) + (n - m)
+			e1{m}        : ψ(e) = mψ(e1)              (if ψ(e) <= max_unroll_complexity)
+			e1{m,}       : ψ(e) = (m + 1)ψ(e1)        (if ψ(e) <= max_unroll_complexity)
+			e1{m,n}      : ψ(e) = nψ(e1) + (n - m)    (if ψ(e) <= max_unroll_complexity)
 
 		if ψ(e) <= max_unroll_complexity: 
 			using trivial unroll algorithm: 
@@ -424,7 +424,7 @@ struct regular_expression {
 				e{m,}  -> e...e+ for m times e;
 				e{m,n} -> e...e(e?...e?) for m times e and n - m times (e?)
 		else: 
-			using loop algorithm for them. 
+			using loop algorithm for the sub expression. 
 	*/
 
 	// the 3rd data of a tuple is used to compute the edge-state pair(or sub expression)'s complexity 	
