@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "*.lua": "lua",
+        "*.tcss": "css",
+        "functional": "cpp"
+    }
+    // "C_Cpp.errorSquiggles": "disabled"
+}

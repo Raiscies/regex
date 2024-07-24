@@ -109,7 +109,7 @@ struct non_determinstic_automaton {
 		bool accept(char_t c) const noexcept{
 			switch(category) {
 			case range_category::epsilon: 
-				return true; 
+				return false; 
 			case range_category::single_char: // range of one char [from]
 				return c == from;
 			case range_category::range:       // range: [from-to]
@@ -369,7 +369,7 @@ public:
 		if(start_states.empty()) return false;
 
 		state_set_t current_states = std::move(delta.do_epsilon_closure(start_states));
-		for(auto c: target) {
+		for(const auto c: target) {
 			auto new_states = delta(current_states, c);
 			if(new_states.empty()) return false; // this nfa does not accept target string
 			current_states = std::move(new_states);
@@ -1106,7 +1106,8 @@ int main(int argc, const char** argv) {
 		string target;
 		fmt::print("input a target string:\n");
 		cin >> target;
-		fmt::print("target = {}, result: {}\n", target, re.output.execute(target));
+		auto result = re.output.execute(target);
+		fmt::print("target = {}, result: {}\n", target, result);
 	}
 	fmt::print("passed.\n");
 
