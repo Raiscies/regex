@@ -2,7 +2,8 @@
     "files.associations": {
         "*.lua": "lua",
         "*.tcss": "css",
-        "functional": "cpp"
+        "functional": "cpp",
+    "tuple": "cpp"
     }
     // "C_Cpp.errorSquiggles": "disabled"
 }
