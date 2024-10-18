@@ -448,6 +448,12 @@ struct regular_expression {
 		expensive_brace_expression_unroll
 	};
 
+	enum match_mode {
+		match, 
+		search, 
+		
+	};
+
 	enum class oper {
 		// enum value represents the priority of the operators
 		kleene,          // *
