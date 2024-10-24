@@ -52,7 +52,17 @@ using std::numeric_limits;
 using std::basic_string_view;
 
 template <typename CharT>
+struct char_range {
+	using char_t = CharT;
+	char_t from, to;
+};
+
+template <typename CharT>
 constexpr bool in_range(CharT a, CharT b, CharT x) noexcept{ return a <= x && x <= b; }
+
+template <typename CharT>
+constexpr bool in_range(const char_range<CharT>& r, CharT x) noexcept { return in_range(r.from, r.to, x); }
+
 
 template <typename CharT>
 struct non_determinstic_automaton {
@@ -62,15 +72,33 @@ struct non_determinstic_automaton {
 	// NFA M = (Q, Σ, δ, q0, F) 
 	using char_t = CharT; // Σ
 	using string_view_t = basic_string_view<char_t>;
+	using range_t = char_range<char_t>;
 
 	using state_t = size_t;
 
-	using state_set_t = set<state_t>; // type of Q or subset of Q
+	using state_set_t = set<state_t>; // type of Q or Q's subset
 
 	struct edge {
+		
+		// struct capture_data_t {};
+		// static constexpr capture_data_t capture_data; // just for constructor overload selection
 
-		char_t from, to;
-		enum range_category: char {
+		union{
+			// active when category == single_char
+			char_t single_char; 
+			// active when category == range
+			range_t range;
+			// active when category == epsilon
+			state_t capture_end;
+
+			// constexpr data_t(char_t from_, char_t to_): range{from_, to_} {}
+			// constexpr data_t(char_t c_): c{c_} {}
+			// constexpr data_t(state_t capture_end_ /*, capture_data_t */): capture_end{capture_end_} {} 
+
+		};
+
+		// char_t from, to;
+		enum class range_category: char {
 			epsilon     = 0, // empty edge
 			single_char = 1, // range of one char [from]
 			range       = 2, // range: [from-to]
@@ -98,22 +126,31 @@ struct non_determinstic_automaton {
 
 		state_t target_state = -1;
 
-		// construct a range with {c}
-		edge(state_t target = -1) noexcept: category{range_category::epsilon}, target_state{target} {} // an empty(epsilon) edge
-		edge(range_category category_, state_t target = -1) noexcept: category{category_}, target_state{target} {}
-		edge(char_t c, bool invert_range_ = false, state_t target = -1) noexcept: category{invert_range_ ? range_category::invert_single_char : range_category::single_char}, from{c}, target_state{target} {}
-		edge(char_t from_, char_t to_, bool invert_range_ = false, state_t target = -1) noexcept: category{invert_range_ ? range_category::invert_range : range_category::range}, from{from_}, to{to_}, target_state{target} {}
-		edge(const edge& other, state_t target) noexcept: from{other.from}, to{other.to}, category{other.category}, target_state{target} {}
-		edge(const edge&) noexcept = default;
+		constexpr edge(state_t target = -1, state_t capture_end = -1) noexcept: 
+			category{range_category::epsilon}, target_state{target}, capture_end{capture_end} {} // an empty(epsilon) edge
+
+		constexpr edge(range_category category_, state_t target = -1) noexcept: 
+			category{category_}, target_state{target} {}
+
+		constexpr edge(char_t c, bool invert_range_ = false, state_t target = -1) noexcept: 
+			category{invert_range_ ? range_category::invert_single_char : range_category::single_char}, single_char{c}, target_state{target} {}
+			
+		constexpr edge(char_t from_, char_t to_, bool invert_range_ = false, state_t target = -1) noexcept: 
+			category{invert_range_ ? range_category::invert_range : range_category::range}, range{from_, to_}, target_state{target} {}
+		
+		constexpr edge(const edge&) noexcept = default;
+		constexpr edge(const edge& other, state_t target) noexcept: edge{other} {
+			target_state = target;
+		}
 
 		bool accept(char_t c) const noexcept{
 			switch(category) {
 			case range_category::epsilon: 
 				return false; 
 			case range_category::single_char: // range of one char [from]
-				return c == from;
+				return c == single_char;
 			case range_category::range:       // range: [from-to]
-				return in_range(from, to, c);
+				return in_range(range, c);
 			case range_category::spaces:      // space chars: [\t\n\v\f\r] == [\x09-\x0d]
 				return in_range('\x09', '\x0d', c);
 			case range_category::words:       // identifier chars(words): [0-9a-zA-Z_]
@@ -131,9 +168,9 @@ struct non_determinstic_automaton {
 			case range_category::non_newlines:       // [^\n\r]
 				return c != '\n' && c != '\r';
 			case range_category::invert_single_char: // [^c]
-				return c != from;
+				return c != single_char;
 			case range_category::invert_range:       // [^from-to]
-				return !in_range(from, to, c);
+				return !in_range(range, c);
 			case range_category::non_spaces:         // [^\t\n\v\f\r]
 				return !in_range('\x09', '\x0d', c);
 			case range_category::non_words:          // [^0-9a-zA-Z_]
@@ -160,13 +197,14 @@ struct non_determinstic_automaton {
 		}
 
 		edge& set_range(char_t from_, char_t to_, bool invert_range_ = false) noexcept{
-			from = from_;
-			to = to_;
+			// from = from_;
+			// to = to_;
+			range = {from_, to};
 			category = invert_range_ ? range_category::invert_range : range_category::range;
 			return *this;
 		}
 		edge& set_range(char_t c, bool invert_range_ = false) noexcept{
-			from = c;
+			single_char = c;
 			category = invert_range_ ? range_category::invert_single_char : range_category::single_char;
 			return *this;
 		}
@@ -186,12 +224,17 @@ struct non_determinstic_automaton {
 		bool is_conjunction_range() const noexcept{
 			return category == range_category::conjunction_range;
 		}
+
+		bool is_capture_start() const noexcept{
+			return category == range_category::epsilon && capture_end != -1;
+		}
+
 	}; // struct edge
 
 	// δ: Q * (Σ ∪ {ε}) -> 2^Q
 	struct transform_t {
 
-		// accept (q, {c-spaces}) -> {q-spaces}
+		// accept (state-space(q), {character-space(c)}) -> {state-space(q)}
 		vector<vector<edge>> m;
 
 		state_set_t& do_epsilon_closure(state_set_t& current_states) const{
@@ -382,14 +425,15 @@ public:
 
 	}
 
-	state_set_t single_execute(char_t c, state_set_t start_states) const{
+	// single step execution
+	state_set_t step(char_t c, state_set_t start_states) const{
 
 		return delta(delta.do_epsilon_closure(start_states), c);
 	}
 }; // struct non_determinstic_automaton
 
 template <typename CharT>
-using nfa = non_determinstic_automaton<CharT>;
+using NFA = non_determinstic_automaton<CharT>;
 
 template <typename CharT, size_t max_unroll_complexity_ = 2000>
 struct regular_expression {
@@ -397,7 +441,10 @@ struct regular_expression {
 	using string_t = basic_string<char_t>;
 	using string_view_t = basic_string_view<char_t>;
 
-	using nfa_t = nfa<char_t>;
+	// store the pattern capture result
+	using capture_t = vector<string_view_t>; 
+
+	using nfa_t = NFA<char_t>;
 	using edge = typename nfa_t::edge;
 	using state_t = typename nfa_t::state_t;
 
@@ -431,7 +478,7 @@ struct regular_expression {
 	using output_stack_t = stack<tuple<edge, state_t, complexity_t>>;
 
 	//parsing output: NFA M = (Q, Σ, δ, q0, F) 
-	nfa_t output;
+	nfa_t nfa;
 
 	regular_expression(string_view_t pattern) {
 		parse(pattern);
@@ -509,6 +556,7 @@ struct regular_expression {
 		return "";
 	}
 
+	// transform a regex pattern to a NFA
 	pair<error_category, const char_t*> parse(string_view_t s) {
 		// RE don't need to tokenize because each of the char (except of escape char sequences) is a token
 
@@ -517,7 +565,7 @@ struct regular_expression {
 		// supported operator: 
 		// *,  |, (concatnation), ., 
 		
-		output.reset();
+		nfa.reset();
 		
 		if(s.empty()) return {success, nullptr};
 
@@ -571,13 +619,19 @@ struct regular_expression {
 					}
 					oper_stack.pop();
 				}
+
 				if(oper_stack.empty()) {
 					// error: missing left paren '('
 					return {missing_paren, pos};
+				}else {
+					// the top must be lparen '('
+					reduce(output_stack, oper_stack.top());
+					oper_stack.pop();
 				}
-				oper_stack.pop(); // pop out left paren (
+
 				++pos;
 				has_potential_concat_oper = true;
+
 				break;
 			case '[': {
 				// [c...] bracket expression
@@ -611,7 +665,7 @@ struct regular_expression {
 			default: {
 				// is character(s)/wildcard
 				edge e;
-				state_t q = output.new_state();
+				state_t q = nfa.new_state();
 				switch(*pos) {
 				case '\\':
 					// escape
@@ -653,8 +707,8 @@ struct regular_expression {
 			}
 			oper_stack.pop();
 		}
-		output.bind_transform(0, get<0>(output_stack.top())/*.first*/);
-		output.mark_final_state(get<1>(output_stack.top())/*.second*/);
+		nfa.bind_transform(0, get<0>(output_stack.top())/*.first*/);
+		nfa.mark_final_state(get<1>(output_stack.top())/*.second*/);
 		return {success, s.end()};
 	}
 
@@ -758,7 +812,7 @@ struct regular_expression {
 		case oper::kleene: {  // *, ψ(e*) = ψ(e) + 1
 			// unary operator
 			auto& [e, q, psi] = current_edge_state;    
-			output.bind_transform(q, e);              // q -e->...> q
+			nfa.bind_transform(q, e);              // q -e->...> q
 			edge new_e {q};                           // new_e = -ε->
 			output_stack.emplace(new_e, q, psi + 1);  // -new_e-> q
 			break;
@@ -766,16 +820,16 @@ struct regular_expression {
 		case oper::positive: { // +, ψ(e+) = 2ψ(e)
 			// unary operator
 			auto& [e, q, psi] = current_edge_state;
-			output.bind_transform(q, e);             // -e->...> q -e->...> q
+			nfa.bind_transform(q, e);             // -e->...> q -e->...> q
 			output_stack.emplace(e, q, 2 * psi);     // -e->...> q
 			break;
 		} 
 		case oper::optional: { // ?, ψ(e?) = ψ(e) + 2
 			// unary operator
 			auto& [e, q, psi] = current_edge_state;
-			state_t new_q = output.new_state();
-			output.bind_transform(new_q, e);
-			output.bind_empty_transform(new_q, q);
+			state_t new_q = nfa.new_state();
+			nfa.bind_transform(new_q, e);
+			nfa.bind_empty_transform(new_q, q);
 			edge new_e = {new_q};
 			output_stack.emplace(new_e, q, psi + 2);
 			break;
@@ -786,7 +840,7 @@ struct regular_expression {
 			auto [e0, q0, psi0] = output_stack.top();
 			auto& [e1, q1, psi1] = current_edge_state;
 			output_stack.pop();
-			output.bind_transform(q0, e1);                // q0 -e1->...> q1
+			nfa.bind_transform(q0, e1);                // q0 -e1->...> q1
 			output_stack.emplace(e0, q1, psi0 + psi1);    // -e0->...> q0 -e1->...> q1
 			break;
 		}
@@ -796,18 +850,29 @@ struct regular_expression {
 			auto [e0, q0, psi0] = output_stack.top();
 			auto& [e1, q1, psi1] = current_edge_state;
 			output_stack.pop();
-			state_t new_q = output.new_state();
-			output.bind_empty_transform(q0, new_q);  // q0 -ε-> new_q
-			output.bind_empty_transform(q1, new_q);  // q1 -ε-> new_q
-			state_t new_q2 = output.new_state();     // create new_q
-			output.bind_transform(new_q2, e0);       // new_q2 -e0->...> q0
-			output.bind_transform(new_q2, e1);       // new_q2 -e1->...> q1
+			state_t new_q = nfa.new_state();
+			nfa.bind_empty_transform(q0, new_q);  // q0 -ε-> new_q
+			nfa.bind_empty_transform(q1, new_q);  // q1 -ε-> new_q
+			state_t new_q2 = nfa.new_state();     // create new_q
+			nfa.bind_transform(new_q2, e0);       // new_q2 -e0->...> q0
+			nfa.bind_transform(new_q2, e1);       // new_q2 -e1->...> q1
 			edge new_e = {new_q2};                   // new_e = -ε->
 			output_stack.emplace(new_e, new_q, psi0 + psi1 + 3);      // -new_e-> new_q2 -{-e0->...> q0, -e1->...> q1}-> new_q
 			break;
 		}
+		case oper::lparen: { // (, ψ( (e) ) = ψ(e) + 1
+			// insert a capture begin empty edge to the sub nfa
+			auto [e, q, psi] = current_edge_state;
+			state_t dummy_state = nfa.new_state();
+			// capture_begin_e directly link the dummy state, and mark the parentess(right parentess) end to state q  
+			edge capture_begin_e {dummy_state, q}; // -(-> dummy_state ... q)  
+			nfa.bind_transform(dummy_state, e); // dummy_state -e-> ... q 
+			output_stack.emplace(capture_begin_e, q, psi + 1);
+			break;
+		}
 		default: {
 			// unknown operators
+			return false;
 		}
 		}
 		return true;
@@ -818,26 +883,29 @@ struct regular_expression {
 		output_stack.pop();
 		return reduce(output_stack, op, top);
 	}
+
+	// void reduce_parentess(output_stack_t& output_stack, )
+
 	void reduce_brackets(output_stack_t& output_stack, vector<edge>& edges) {
 		if(edges.empty()) {
 			// []
-			state_t new_q = output.new_state();
+			state_t new_q = nfa.new_state();
 			// -x-> new_q
 			// always not accept
 			output_stack.emplace(edge{edge::range_category::none, new_q}, new_q, 1);
 		}else if(edges.size() == 1) {
 			// [r] == r
-			state_t new_q = output.new_state();
+			state_t new_q = nfa.new_state();
 			// ---> new_q
 			output_stack.emplace(edges[0].set_target(new_q), new_q, 1);
 		}else {
 			// [R1...Rn]
-			state_t new_q1 = output.new_state(), 
-			        new_q2 = output.new_state();
+			state_t new_q1 = nfa.new_state(), 
+			        new_q2 = nfa.new_state();
 			edge new_e = {new_q1}; // new_e: -ε-> new_q1
 			// -ε-> new_q1 -{e1, e2, ...en}-> new_q2
 			for(auto& e: edges) 
-				output.bind_transform(new_q1, e.set_target(new_q2));
+				nfa.bind_transform(new_q1, e.set_target(new_q2));
 
 			output_stack.emplace(new_e, new_q2, edges.size() + 1);
 		}
@@ -845,30 +913,31 @@ struct regular_expression {
 	void reduce_brackets_invert(output_stack_t& output_stack, vector<edge>& edges) {
 		if(edges.empty()) {
 			// [^]
-			state_t new_q = output.new_state();
+			state_t new_q = nfa.new_state();
 			// ---> new_q
 			// always accept
 			output_stack.emplace(edge{edge::range_category::all, new_q}, new_q, 1);
 		}else if(edges.size() == 1) {
 			// [^r]
-			state_t new_q = output.new_state();
+			state_t new_q = nfa.new_state();
 			// -^e-> new_q
 			output_stack.emplace(edges[0].invert().set_target(new_q), new_q, 1);
 		}else {
 			// [^R1...Rn]
-			state_t new_q1 = output.new_state(), 
-			        new_q2 = output.new_state();
+			state_t new_q1 = nfa.new_state(), 
+			        new_q2 = nfa.new_state();
 			edge new_e = {new_q1}; // new_e: -ε-> new_q1
-			output.bind_transform(new_q1, edge{edge::range_category::conjunction_range, new_q2});
+			nfa.bind_transform(new_q1, edge{edge::range_category::conjunction_range, new_q2});
 			// -ε-> new_q1 -{conjunction_flag, ^e1, ^e2, ...^en}-> new_q2
 			for(auto& e: edges) 
-				output.bind_transform(new_q1, e.invert().set_target(new_q2));
+				nfa.bind_transform(new_q1, e.invert().set_target(new_q2));
 
 			output_stack.emplace(new_e, new_q2, edges.size() + 2);
 
 		}
 	}
 
+	// counted loop 'R{n, m}' grammer
 	bool reduce_braces(output_stack_t& output_stack, const tuple<int, size_t, size_t>& braces_res) {
 		if(try_unroll_brace_expression(output_stack, braces_res)) {
 			return true;
@@ -894,29 +963,29 @@ struct regular_expression {
 				output_stack.pop();
 
 				state_t current_q = q;
-				state_t final_q = output.new_state();
+				state_t final_q = nfa.new_state();
 				if(m != 0) {
 					for(size_t i = 0; i <= m - 1; ++i) { // loop m - 1 times
-						auto [new_e, new_q] = output.copy_sub_expression(e, q);
-						output.bind_transform(current_q, new_e);
+						auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
+						nfa.bind_transform(current_q, new_e);
 						current_q = new_q;
 					}
-					output.bind_empty_transform(current_q, final_q);
+					nfa.bind_empty_transform(current_q, final_q);
 					for(size_t i = 0; i < n - m; ++i) {
-						auto [new_e, new_q] = output.copy_sub_expression(e, q);
-						output.bind_transform(current_q, new_e);
-						output.bind_empty_transform(current_q, final_q);
+						auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
+						nfa.bind_transform(current_q, new_e);
+						nfa.bind_empty_transform(current_q, final_q);
 						current_q = new_q;
 					}
 				}else {
-					edge front_e = {output.new_state()};
-					output.bind_empty_transform(front_e.target_state, final_q);
-					output.bind_transform(front_e.target_state, e);
-					output.bind_empty_transform(current_q, final_q);
+					edge front_e = {nfa.new_state()};
+					nfa.bind_empty_transform(front_e.target_state, final_q);
+					nfa.bind_transform(front_e.target_state, e);
+					nfa.bind_empty_transform(current_q, final_q);
 					for(size_t i = 0; i < n - 1; ++i) { // n != m => n != 0
-						auto [new_e, new_q] = output.copy_sub_expression(e, q);
-						output.bind_transform(current_q, new_e);
-						output.bind_empty_transform(new_q, final_q);
+						auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
+						nfa.bind_transform(current_q, new_e);
+						nfa.bind_empty_transform(new_q, final_q);
 						current_q = new_q;
 					}
 					e = front_e;
@@ -939,8 +1008,8 @@ struct regular_expression {
 
 				state_t current_q = q;
 				for(size_t i = 0; i < m - 1; ++i) {
-					auto [new_e, new_q] = output.copy_sub_expression(e, q);
-					output.bind_transform(current_q, new_e);
+					auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
+					nfa.bind_transform(current_q, new_e);
 					current_q = new_q;
 				}
 				output_stack.emplace(e, current_q, new_psi);
@@ -950,7 +1019,7 @@ struct regular_expression {
 			if(m == 0) {
 				// e{0,} == e*
 				output_stack.pop();
-				output.bind_transform(q, e);                // q -e->...> q
+				nfa.bind_transform(q, e);                // q -e->...> q
 				output_stack.emplace(edge{q}, q, psi + 1);  // -ε-> q
 			}else {
 				// e{m,} == e ... e+
@@ -960,11 +1029,11 @@ struct regular_expression {
 
 				state_t current_q = q;
 				for(size_t i = 0; i < m - 1; ++i) {
-					auto [new_e, new_q] = output.copy_sub_expression(e, q);
-					output.bind_transform(current_q, new_e);
+					auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
+					nfa.bind_transform(current_q, new_e);
 					current_q = new_q;
 				}
-				output.bind_transform(current_q, edge{e, current_q});
+				nfa.bind_transform(current_q, edge{e, current_q});
 				output_stack.emplace(e, current_q, new_psi);
 			}
 			break;
@@ -1082,6 +1151,16 @@ struct regular_expression {
 		return {parse_stete, m, n};
 	}
 
+	// check if the target is fully match the regex 
+	auto match(string_view_t target) const noexcept -> capture_t {
+		
+	}
+
+	// search the regex pattern from target
+	auto search(string_view_t target) const -> capture_t {
+
+	}
+
 private:
 
 	static constexpr int hex_val(char_t x) noexcept{
@@ -1112,7 +1191,7 @@ int main(int argc, const char** argv) {
 		string target;
 		fmt::print("input a target string:\n");
 		cin >> target;
-		auto result = re.output.execute(target);
+		auto result = re.nfa.execute(target);
 		fmt::print("target = {}, result: {}\n", target, result);
 	}
 	fmt::print("passed.\n");
