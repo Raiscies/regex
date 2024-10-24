@@ -3,12 +3,8 @@
     {
       "name": "windows-gcc-x64",
       "includePath": [
-<<<<<<< HEAD
-        "${workspaceFolder}/**"
-=======
         "${workspaceFolder}/**",
         "D:/raiscies/repo/c++/libraries/fmt/include/"
->>>>>>> 4b20a30244f6ee59126224f3cf59ecd52acbf301
       ],
       "defines": [
         "_DEBUG",
