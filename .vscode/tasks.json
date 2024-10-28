@@ -9,7 +9,12 @@
                 "-g",
                 "${file}",
                 "-o",
-                "${fileDirname}\\${fileBasenameNoExtension}.exe"
+                "${fileDirname}\\${fileBasenameNoExtension}.exe",
+                "-Og", 
+                "-g", 
+                "-I\"D:/raiscies/repo/c++/libraries/fmt/include/\"",
+                "-L\"D:/Raiscies/repo/C++/libraries/fmt/build/\"",
+                "-l:\"libfmt.a\"",  
             ],
             "options": {
                 "cwd": "C:/msys64/mingw64/bin"

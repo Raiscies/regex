@@ -6,9 +6,7 @@
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/regular_expression.exe",
-      "args": [
-        "ab*"
-      ],
+      "args": [],
       "stopAtEntry": false,
       "cwd": "${fileDirname}",
       "environment": [],
@@ -29,27 +27,14 @@
       ]
     },
     {
-      "name": "(Windows) 启动",
-      "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}/regular_expression.exe",
-      "args": [
-        "a[bc]*"
-      ],
-      "stopAtEntry": false,
-      "cwd": "${fileDirname}",
-      "environment": [],
-      "console": "externalTerminal"
-    },
-    {
       "name": "C/C++ Runner: Debug Session",
       "type": "cppdbg",
       "request": "launch",
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "d:/Raiscies/cpp_file/compiler_learning/regular_expression",
-      "program": "d:/Raiscies/cpp_file/compiler_learning/regular_expression/build/Debug/outDebug",
+      "cwd": "d:/Raiscies/repo/C++/regex",
+      "program": "d:/Raiscies/repo/C++/regex/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

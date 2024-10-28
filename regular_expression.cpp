@@ -28,9 +28,11 @@
 #include <iostream>
 #include <functional>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 
 #include "fmt/core.h"
+#include "fmt/ranges.h"
 
 namespace rais {
 
@@ -52,6 +54,7 @@ using std::string_view;
 using std::basic_string;
 using std::unordered_map;
 using std::numeric_limits;
+using std::underlying_type_t;
 using std::reference_wrapper;
 using std::basic_string_view;
 
@@ -164,7 +167,7 @@ struct non_determinstic_automaton {
 		static constexpr edge make_capture(bool greedy, state_t target, state_t capture_end) noexcept{
 			return {greedy, target, capture_end};
 		}
-		static constexpr edge make_conjunction(state_c target = -1) noexcept{
+		static constexpr edge make_conjunction(state_t target = -1) noexcept{
 			return {range_category::conjunction_range, target};
 		}
 		
@@ -234,7 +237,7 @@ struct non_determinstic_automaton {
 		edge& set_range(char_t from_, char_t to_, bool invert_range_ = false) noexcept{
 			// from = from_;
 			// to = to_;
-			range = {from_, to};
+			range = {from_, to_};
 			category = invert_range_ ? range_category::invert_range : range_category::range;
 			return *this;
 		}
@@ -250,7 +253,7 @@ struct non_determinstic_automaton {
 
 
 		edge& invert() noexcept{
-			category = range_category(-category);
+			category = range_category(-static_cast<underlying_type_t<range_category>>(category));
 			return *this;	
 		}
 		bool is_single_char() const noexcept{
@@ -277,16 +280,20 @@ struct non_determinstic_automaton {
 	// stores the contexts of captures in running nfa
 	struct capture_contexts {
 
+		capture_contexts() = default;
+
 		struct capture_context_item {
 			const edge& begin;  // the begin of a sub-nfa
 			const state_t end;  // the end of a sub-nfa
-			const greedy;
+			const bool greedy;
 
-			char_t* capture_begin = nullptr, 
-			      * capture_end = nullptr;
+			const char_t* capture_begin = nullptr, 
+			            * capture_end = nullptr;
 			bool completed = false;
 
-			constexpr capture_contexts(const edge& begin_) noexcept: begin{begin_}, end{begin_.capture_end}, greedy{begin.is_greedy_capture()} {}
+			constexpr capture_context_item(const edge& begin_, const char_t* capture_begin_ = nullptr) noexcept: begin{begin_}, end{begin_.capture_end}, greedy{begin.is_greedy_capture()}, capture_begin{capture_begin_} {}
+
+			constexpr capture_context_item() noexcept {}
 
 			void reset_capture(const char_t* new_begin = nullptr) noexcept{
 				capture_begin = new_begin;
@@ -303,20 +310,21 @@ struct non_determinstic_automaton {
 
 			string_view_t get_capture() const noexcept{
 				if(capture_begin != nullptr && capture_end != nullptr) 
-					return {capture_begin, capture_end};
+					// capture_begin is pointing to the position that ahead of the first char of the capture
+					return {capture_begin + 1, static_cast<size_t>(capture_end - capture_begin)};
 				else 
 					return {};
 			}
 
 		}; 
 
-		unordered_map<reference_wrapper<const edge>, capture_context_item> contexts;
-		unordered_map<state_t, reference_wrapper<capture_context_item>> contexts_ref_by_state;
+		unordered_map<const edge*, capture_context_item> contexts;
+		unordered_map<state_t, capture_context_item*> contexts_ref_by_state;
 
-		bool new_context(const edge& e) {
-			auto [it, inserted] contexts.try_emplace(e, e);
+		bool new_context(const edge& e, const char_t* capture_begin = nullptr) {
+			auto [it, inserted] = contexts.try_emplace(&e, e, capture_begin);
 			if(inserted) {
-				contexts_ref_by_state.try_emplace(e.capture_end, *it);
+				contexts_ref_by_state.try_emplace(e.capture_end, &it->second);
 			}
 
 			return inserted;
@@ -324,8 +332,8 @@ struct non_determinstic_automaton {
 
 		// reset context by the edge if it's already exists, or else create a new context
 		void reset_capture(const edge& e, const char_t* capture_begin = nullptr) {
-			if(not new_context(e)) {
-				contexts[e].reset_capture(capture_begin);
+			if(not new_context(e, capture_begin)) {
+				contexts.at(&e).reset_capture(capture_begin);
 			}
 		}
 
@@ -339,30 +347,32 @@ struct non_determinstic_automaton {
 		// always assume the arguments are valid 
 
 		bool try_complete_capture(const edge& e, const char_t* capture_end) {
-			if(contexts.count(e) != 0) {
-				contexts[e].complete_capture(capture_end);
+			if(contexts.count(&e) != 0) {
+				contexts.at(&e).complete_capture(capture_end);
 				return true;
 			}
 			return false;
 		}
 		bool try_complete_capture(state_t end_state, const char_t* capture_end) {
 			if(contexts_ref_by_state.count(end_state) != 0) {
-				contexts_ref_by_state[end_state].complete_capture(capture_end);
-				return true
+				contexts_ref_by_state[end_state]->complete_capture(capture_end);
+				return true;
 			}
 			return false;
 		}
 
 		capture_context_item& get_context(const edge& e) {
-			return contexts[e];
+			return contexts.at(&e);
 		}
 		capture_context_item& get_context(state_t end_state) {
-			return contexts_ref_by_state[e]
+			return *contexts_ref_by_state[end_state];
 		}
 
 		result_t get_result() const{
 			result_t captures;
-			for(capture_context_item& context: contexts) {
+			for(auto& kv: contexts) {
+				const capture_context_item& context = kv.second;
+				// auto& [eptr, context] = kv;
 				if(context.completed) 
 					captures.push_back(context.get_capture());
 			}
@@ -438,7 +448,7 @@ struct non_determinstic_automaton {
 			for(auto q: current_states) {
 				// for each protential current state
 				if(m[q].empty()) continue;
-				else if(auto first_edge = m[q][0], first_edge.is_conjunction_range()) {
+				else if(auto first_edge = m[q][0]; first_edge.is_conjunction_range()) {
 					// this state and its edges are conjunction
 					// c is accepted only when all of the edges are accepted 
 					for(auto it = ++m[q].cbegin(); it != m[q].cend(); ++it)
@@ -457,7 +467,8 @@ struct non_determinstic_automaton {
 					} 
 				}
 			}
-			return do_epsilon_closure(new_states);
+			return new_states;
+			// return do_epsilon_closure(new_states);
 		}
 
 		state_set_t operator()(const state_set_t& current_states, const char_t* pos, capture_contexts& contexts) const{
@@ -470,7 +481,7 @@ struct non_determinstic_automaton {
 			for(auto q: current_states) {
 				// for each protential current state
 				if(m[q].empty()) continue;
-				else if(auto first_edge = m[q][0], first_edge.is_conjunction_range()) {
+				else if(auto first_edge = m[q][0]; first_edge.is_conjunction_range()) {
 					// this state and its edges are conjunction
 					// c is accepted only when all of the edges are accepted 
 					for(auto it = ++m[q].cbegin(); it != m[q].cend(); ++it)
@@ -478,7 +489,7 @@ struct non_determinstic_automaton {
 
 					// this conjunction range is accepted
 					new_states.insert(first_edge.target_state);
-					contexts.try_complete_capture(first_edge.target_state);
+					contexts.try_complete_capture(first_edge.target_state, pos);
 
 					next_state:;
 				}else {
@@ -494,7 +505,9 @@ struct non_determinstic_automaton {
 					} 
 				}
 			}
-			return do_epsilon_closure(new_states, pos, contexts);
+			// does not do_epsilon_closure anymore
+			return new_states;
+			// return do_epsilon_closure(new_states, pos, contexts);
 		}
 
 	}; // struct transform_t
@@ -628,8 +641,13 @@ public:
 		if(start_states.empty()) return false;
 
 		state_set_t current_states = std::move(delta.do_epsilon_closure(start_states));
+
 		for(const auto c: target) {
+			// move to the next state set
 			auto new_states = delta(current_states, c);
+			// do ε-closure
+			delta.do_epsilon_closure(current_states);
+
 			if(new_states.empty()) return false; // this nfa does not accept target string
 			current_states = std::move(new_states);
 		}
@@ -648,11 +666,15 @@ public:
 		capture_contexts contexts;
 
 		state_set_t current_states = {0};
-		delta.do_epsilon_closure(current_states);
 
-		for(const auto pos = target.cbegin(); pos != target.cend(); ++pos) {
+		auto pos = target.cbegin();
+		delta.do_epsilon_closure(current_states, pos - 1, contexts);
+
+		for(; pos != target.cend(); ++pos) {
+			// move to the next state set
 			auto new_states = delta(current_states, pos, contexts);
-
+			// an then do ε-closure
+			delta.do_epsilon_closure(new_states, pos, contexts);
 			if(new_states.empty()) return {}; // nothing to match
 			current_states = std::move(new_states);
 		}
@@ -672,11 +694,14 @@ public:
 		state_set_t current_states;
 
 		// naive!
-		for(const auto s = target.cbegin(); s != target.cend();) {
+		for(auto s = target.cbegin(); s != target.cend();) {
 			current_states.emplace(0);
-			delta.do_epsilon_closure(current_states);
 
-			for(const auto pos = s; pos != target.cend(); ++pos) {
+			auto pos = s;
+
+			delta.do_epsilon_closure(current_states, pos, contexts);
+
+			for(; pos != target.cend(); ++pos) {
 				auto new_states = delta(current_states, *pos);
 				if(new_states.empty()) {
 					// not return false, but let s move to the next char, 
@@ -693,7 +718,7 @@ public:
 
 			next_pass:
 			// reset all of state set and contexts
-			contexts.reset_all_captures()
+			contexts.reset_all_captures();
 			current_states.clear();
 			++s;
 		}
@@ -775,12 +800,6 @@ struct regular_expression {
 		bad_bracket_expression,
 		bad_brace_expression,
 		expensive_brace_expression_unroll
-	};
-
-	enum match_mode {
-		match, 
-		search, 
-		
 	};
 
 	enum class oper {
@@ -1370,12 +1389,12 @@ struct regular_expression {
 						if(!lex_res.value().is_single_char()) {
 							return {}; // bad char range like: [c-\w]
 						}
-						edges.back().set_range(edges.back().from, lex_res.value().from); // [p-\q]
+						edges.back().set_range(edges.back().range.from, lex_res.value().range.from); // [p-\q]
 					}else return {};
 				default:
 					// chars
 					// parse_char_literally
-					edges.back().set_range(edges.back().from, *pos); // [p-q]
+					edges.back().set_range(edges.back().range.from, *pos); // [p-q]
 					++pos;
 				}
 				state = parse_char_literally;
@@ -1435,16 +1454,6 @@ struct regular_expression {
 		return {parse_stete, m, n};
 	}
 
-	// // check if the target is fully match the regex 
-	// auto match(string_view_t target) const noexcept -> capture_t {
-		
-	// }
-
-	// // search the regex pattern from target
-	// auto search(string_view_t target) const -> capture_t {
-
-	// }
-
 private:
 
 	static constexpr int hex_val(char_t x) noexcept{
@@ -1463,22 +1472,39 @@ private:
 } // namespace rais
 
 int main(int argc, const char** argv) {
-	if(argc <= 1) return 0;
+	
+	using namespace fmt;
 	using namespace rais;
 
-	fmt::print("pattern: {}\n", argv[1]);
-	regular_expression<char> re;
-	auto [parse_result, pos] = re.parse(argv[1]);
-	fmt::print("pattern result: {}\n", re.error_message(parse_result));
-	if(parse_result != regular_expression<char>::error_category::success) return 1;
+
 	while(true) {
-		string target;
-		fmt::print("input a target string:\n");
-		cin >> target;
-		auto result = re.nfa.test(target);
-		fmt::print("target = {}, result: {}\n", target, result);
+		
+		string pattern = "";
+		
+		print("input a pattern:\n");
+		cin >> pattern;
+
+		print("pattern: {}\n", pattern);
+
+		regular_expression<char> re;
+		
+		auto [parse_result, pos] = re.parse(pattern);
+		
+		print("pattern result: {}\n", re.error_message(parse_result));
+		
+		if(parse_result != regular_expression<char>::error_category::success) continue;
+
+		while(true) {
+			string target;
+			print("input a target string:\n");
+			cin >> target;
+			if(target == "~") break;
+			bool passed_test = re.nfa.test(target);
+			auto result = re.nfa.match(target);
+			print("target = {}, test result = {}, capture: {}\n", target, passed_test, result);
+		}
+		
 	}
-	fmt::print("passed.\n");
 
 	return 0;
 }
