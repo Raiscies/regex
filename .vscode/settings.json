@@ -59,6 +59,12 @@
   "files.associations": {
     "*.lua": "lua",
     "*.tcss": "css",
-    "streambuf": "cpp"
-  }
+    "streambuf": "cpp",
+    "string_view": "cpp",
+    "type_traits": "cpp",
+    "tuple": "cpp",
+    "limits": "cpp",
+    "random": "cpp"
+  },
+  "C_Cpp.errorSquiggles": "enabled"
 }
