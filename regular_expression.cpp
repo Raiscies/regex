@@ -193,16 +193,42 @@ class nfa_builder {
 
 	using nfa_t = non_determinstic_automaton<char_t>;
 
-	
+	// using state_iterator_t = size_t;
 
-	// using state_id_t = size_t;
-
-	// using stateset_t = set<state_id_t>; // type of Q or Q's subset
+	// using stateset_t = set<state_iterator_t>; // type of Q or Q's subset
 
 	// indicate a sub nfa's complexity
 	using complexity_t = size_t;
 	static constexpr complexity_t default_unroll_complexity = 2000;
 	complexity_t max_unroll_complexity = default_unroll_complexity;
+
+	
+	constexpr nfa_builder() {}
+	
+	struct edge;
+	
+	// internal representation(IR) of NFA state
+	struct state {
+		
+		// out-going edges
+		vector<edge> edges;
+		bool is_conjunction = false;
+		
+		constexpr state() noexcept = default;
+		constexpr state(bool is_conjunction) noexcept: 
+		is_conjunction{is_conjunction} {}
+		
+		state* add_outgoing(const edge& e) {
+			edges.push_back(e);
+			return this;
+		}
+		
+		state* set_conjunction(bool is_conjunction) {
+			this->is_conjunction = is_conjunction;
+			return this;
+		}
+		
+	}; // state
 
 	// vector<unique_ptr<state>> states;
 	list<state> states;
@@ -213,33 +239,6 @@ class nfa_builder {
 	state_iterator_t final_state;
 	vector<state_iterator_t> capture_groups; // capture groups' end state
 	
-
-	constexpr nfa_builder() {}
-
-	struct edge;
-
-	// internal representation(IR) of NFA state
-	struct state {
-
-		// out-going edges
-		vector<edge> edges;
-		bool is_conjunction = false;
-
-		constexpr state() noexcept = default;
-		constexpr state(bool is_conjunction) noexcept: 
-			is_conjunction{is_conjunction} {}
-
-		state* add_outgoing(const edge& e) {
-			edges.push_back(e);
-			return this;
-		}
-
-		state* set_conjunction(bool is_conjunction) {
-			this->is_conjunction = is_conjunction;
-			return this;
-		}
-
-	}; // state
 
 	// internal representation(IR) of NFA::edge
 	struct edge {
@@ -252,7 +251,7 @@ class nfa_builder {
 			// active when category == range
 			range_t range;
 			// active when category == epsilon
-			size_t capture_group_id;
+			size_t capture_group_id = numeric_limits<size_t>::max();
 		} data; 
 
 		constexpr edge(edge_category category, char_t single_char, state_iterator_t target = {}): 
@@ -301,17 +300,26 @@ class nfa_builder {
 			category = edge_category(-static_cast<underlying_type_t<edge_category>>(category));
 			return *this;
 		}
+		edge& remove_capture_id() noexcept{
+			if(category == edge_category::epsilon) data.capture_group_id = numeric_limits<size_t>::max();
+			return *this;
+		}
 
 
 	}; // edge
 
 	struct subnfa {
 		edge begin_edge;
-		state_iterator_t end_state;
+
+		// // all of the states between begin_state to end_state are belong to this sub-nfa, 
+		// // notice: begin_state.target is gernally not equal to begin_state
+		// state_iterator_t begin_state; // the state with the lowest index of the sub-nfa 
+		state_iterator_t end_state;   // the state with the highest index of the sub-nfa
+
 		complexity_t complexity;
 
-		constexpr subnfa(const edge& begin_edge, state_iterator_t end_state, complexity_t complexity) noexcept: 
-			begin_edge{begin_edge}, end_state{end_state}, complexity{complexity} {}
+		// constexpr subnfa(const edge& begin_edge, state_iterator_t begin_state, state_iterator_t end_state, complexity_t complexity) noexcept: 
+		// 	begin_edge{begin_edge}, begin_state{begin_state}, end_state{end_state}, complexity{complexity} {}
 
 		constexpr subnfa(const subnfa&) noexcept = default;
 
@@ -375,7 +383,29 @@ class nfa_builder {
 
 protected:
 	
-	stack<subnfa, vector<subnfa>> nfa_stack;
+	// stack<subnfa, vector<subnfa>> nfa_stack;
+	
+	// we don't directly use stack cause sometimes we need to assess the 2th top element of the stack,
+	// but don't want to pop the top, access it and push it back. 
+	struct nfa_stack_t: public std::stack<subnfa, vector<subnfa>> {
+		using stack_t = std::stack<subnfa, vector<subnfa>>;
+
+		// it is UB if size() < 2
+		constexpr stack_t::const_reference second_top() const{
+			// return this->C[size() - 2]; 
+			return *++this->C.crbegin() // slightly released inner container constrain
+		}
+		constexpr stack_t::reference second_top() {
+			// return this->C[size() - 2];
+			return *++this->C.rbegin()
+		}
+
+		constexpr bool has_second_top() const noexcept{
+			return size() >= 2;
+		}
+
+	} nfa_stack;
+
 	stack<oper>	oper_stack;
 
 public:
@@ -383,6 +413,7 @@ public:
 	void reset() {
 		states.clear();
 		final_state = nullptr;
+		capture_groups.clear();
 	}
 
 	template <typename... Args>
@@ -463,16 +494,16 @@ public:
 				nfa_stack.pop();
 
 				// previous sub-nfa, we must pop it to access its pre-pre sub-nfa
-				auto [pre_begin_edge, pre_end_state, pre_complexity] = nfa_stack.top();
-				nfa_stack.pop();
+				auto& [pre_begin_edge, pre_end_state, pre_complexity] = nfa_stack.top();
+				// nfa_stack.pop();
 
 
 				// the new branch_state must priviously be these two sub-nfa,
 				// so we must insert it before the pre_start_state's target state 
 				auto branch_state = insert_new_state(
-					nfa_stack.empty() ? 
-					states.begin() :
-					std::next(nfa_stack.top().end_state)
+					nfa_stack.has_second_top() ? 
+					std::next(nfa_stack.second_top().end_state) :
+					states.front()
 				);
 
 				branch_state->add_outgoing(pre_begin_edge)
@@ -482,11 +513,9 @@ public:
 				pre_end_state->add_outgoing(edge::make_epsilon(merge_state));
 				end_state->add_outgoing(edge::make_epsilon(merge_state));
 
-				nfa_stack.emplace(
-					edge::make_epsilon(branch_state), 
-					merge_state, 
-					pre_complexity + complexity + 3
-				)
+				pre_begin_edge = edge::make_epsilon(branch_state);
+				pre_end_state = merge_state;
+				pre_complexity += complexity + 3;
 
 				break;
 			}
@@ -499,7 +528,6 @@ public:
 				auto& [capture_begin_edge, dummy_state, cap_complexity] = nfa_stack.top();
 				dummy_state->add_outgoing(begin_edge);
 				capture_groups[capture_begin_edge.data.capture_group_id] = end_state;
-				
 				cap_complexity += complexity;
 				break;
 			}
@@ -906,79 +934,45 @@ public:
 		return false; 
 	}
 
-	// TODO: remake
-	subnfa copy_subnfa(const subnfa& nfa) {
-		// deep copy a sub-nfa
-		// assume begin_edge and end_state are both valid
-		// traverse the directed graph  -begin_edge-> ... > end_state
+
+
+	subnfa copy_subnfa_before(const subnfa& nfa, state_iterator_t begin_state, bool remove_capture_id = true) {
+		// deep copy a sub-nfa before the source nfa, and promise states' relative order is not changed,
 		// notice: if the source sub-nfa contains capture, 
 		// at the runtime, the captured string will be reset on the next match
 		// for example: (R){m}, it will only capture the last match string of R, but not m captures of each R match
-		// this should be handle properly
+		// this should be handle properly.
 
-		edge e_copy {e, new_state()};
-		if(e.target == q) {
-			// delta.m.emplace_back();
-			for(auto& edge_from_q: delta.m[q]) {
-				if(edge_from_q.target == q) 
-					delta.m[e_copy.target].emplace_back(edge_from_q, e_copy.target);
-			}
-			return {e_copy, e_copy.target};
+		const auto [begin_edge, end_state, complexity] = nfa;
+		map<const state_iterator_t, state_iterator_t> memo;
+
+		for(auto it = begin_state; it != end_state; ++it) {
+			// memo[it] = new_state(it->is_conjunction);
+			memo[it] = insert_new_state(begin_state, it->is_conjunction)
 		}
-
-		// delta.m.emplace_back(delta.m[e.target]); // index is e_copy.target
-		delta.m[e_copy.target] = delta.m[e.target];
-
-		map<state_id_t, state_id_t> memo{{e.target, e_copy.target}}; // [src_state_index] -> [copy_state_index]
-		queue<state_id_t> que; 
-		que.emplace(e_copy.target);
-		state_id_t q_copy;
-		while(!que.empty()) {
-			auto copy = que.front();
-			que.pop();
-			
-			// replace the target states
-			for(auto& edge_from_copy: delta.m[copy]) {
-				if(auto it = memo.find(edge_from_copy.target); it != memo.end()) {
-					// don't need to create new state
-					edge_from_copy.set_target(get<1>(*it));
-				}else {
-					// create new state
-					state_id_t new_target = new_state(delta.m[edge_from_copy.target]);
-					memo[edge_from_copy.target] = new_target; // register memo
-					if(edge_from_copy.target != q)  // the edge list of the last state q should be copy at the end
-						que.emplace(new_target);
-					else 
-						q_copy = new_target;
-					edge_from_copy.set_target(new_target); // reset target
+		if(remove_capture_id) {
+			for(auto& [src, dst]: memo) {
+				for(auto& e: src->edges) {
+					dst->add_outgoing(edge{e, memo[e.target]}.remove_capture_id());
 				}
 			}
-		}
-		// copy the last state q
-		// remove-erase idiom, note that the order of the edges are not important
-		auto forward =   delta.m[q_copy].begin(),
-		    backward = --delta.m[q_copy].end();
-		while(forward != delta.m[q_copy].end()) {
-			if(auto forward_res = memo.find(forward->target); forward_res != memo.end()) {
-				forward->set_target(get<1>(*forward_res));
-				++forward;
-			}else {
-				while(backward != forward) {
-					if(auto backward_res = memo.find(backward->target); backward_res != memo.end()) {
-						(*forward = *backward).set_target(get<1>(*backward_res));
-						--backward;
-						goto next_forward;
-					}else --backward;
+			return {
+				edge{begin_edge, memo[begin_edge.target]}.remove_capture_id(), 
+				memo[end_state], 
+				complexity
+			}
+		}else {
+			for(auto& [src, dst]: memo) {
+				for(auto& e: src->edges) {
+					dst->add_outgoing(edge{e, memo[e.target]});
 				}
-				// backward == forward
-				break;
-				next_forward:
-				++forward;
+			}
+			return {
+				edge{begin_edge, memo[begin_edge.target]}, 
+				memo[end_state], 
+				complexity
 			}
 		}
-		delta.m[q_copy].erase(forward, delta.m[q_copy].end());
-		
-		return {e_copy, q_copy};
 	}
 
 	// TODO: remake
@@ -995,98 +989,130 @@ public:
 		// here the parentheses identify the same capture
 
 		auto& [begin_edge, end_state, complexity] = nfa_stack.top();
+
+		auto unroll_fixed_brace_expression = 
+			[this, begin_edge, end_state](size_t copy_count, bool remove_capture_id = true) {
+
+			assert(copy_count >= 1);
+			
+			auto begin_state = nfa_stack.has_second_top() ? std::next(nfa_stack.second_top().end_state) : states.front();
+
+			auto [first_begin_edge, current_end_state, _] = copy_subnfa_before(nfa, begin_edge, remove_capture_id);
+
+			for(size_t i = 0; i < copy_count - 1; ++i) {
+				auto [new_begin_edge, new_end_state, _] 
+					= copy_subnfa_before(nfa, begin_state, remove_capture_id);
+				
+				current_end_state->add_outgoing(new_begin_edge);
+				current_end_state = new_end_state;
+			}
+
+			return subnfa{
+				first_begin_edge, 
+				current_end_state
+				// no need to return complexity
+			};
+
+		};
+		
 		auto [kind, m, n] = braces_res;
 		complexity_t new_complexity;
-
-		// nfa_stack.pop();
 		
 		switch(kind) {
-		case 3: // e{m,n}
+		case braces_result::bounded: // e{m,n}
 			if(m != n) {
-				new_complexity = n * complexity + n - m;
-				if(new_complexity > max_unroll_complexity) return false;
-				nfa_stack.pop();
+				// new_complexity = n * complexity + n - m;
+				if((new_complexity = n * (complexity + 1) - m) > max_unroll_complexity) return false;
+				// nfa_stack.pop();
 
-				state_id_t current_q = q;
-				state_id_t final_q = nfa.new_state();
-				if(m != 0) {
-					for(size_t i = 0; i <= m - 1; ++i) { // loop m - 1 times
-						auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
-						nfa.bind_transform(current_q, new_e);
-						current_q = new_q;
-					}
-					nfa.bind_empty_transform(current_q, final_q);
-					for(size_t i = 0; i < n - m; ++i) {
-						auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
-						nfa.bind_transform(current_q, new_e);
-						nfa.bind_empty_transform(current_q, final_q);
-						current_q = new_q;
-					}
-				}else {
-					edge front_e = {nfa.new_state()};
-					nfa.bind_empty_transform(front_e.target, final_q);
-					nfa.bind_transform(front_e.target, e);
-					nfa.bind_empty_transform(current_q, final_q);
-					for(size_t i = 0; i < n - 1; ++i) { // n != m => n != 0
-						auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
-						nfa.bind_transform(current_q, new_e);
-						nfa.bind_empty_transform(new_q, final_q);
-						current_q = new_q;
-					}
-					e = front_e;
-				}
-				nfa_stack.emplace(e, final_q, new_complexity);
+				// TODO
+				// state_iterator_t current_q = q;
+				// state_iterator_t final_q = nfa.new_state();
+				// if(m != 0) {
+				// 	for(size_t i = 0; i <= m - 1; ++i) { // loop m - 1 times
+				// 		auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
+				// 		nfa.bind_transform(current_q, new_e);
+				// 		current_q = new_q;
+				// 	}
+				// 	nfa.bind_empty_transform(current_q, final_q);
+				// 	for(size_t i = 0; i < n - m; ++i) {
+				// 		auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
+				// 		nfa.bind_transform(current_q, new_e);
+				// 		nfa.bind_empty_transform(current_q, final_q);
+				// 		current_q = new_q;
+				// 	}
+				// }else {
+				// 	edge front_e = {nfa.new_state()};
+				// 	nfa.bind_empty_transform(front_e.target, final_q);
+				// 	nfa.bind_transform(front_e.target, e);
+				// 	nfa.bind_empty_transform(current_q, final_q);
+				// 	for(size_t i = 0; i < n - 1; ++i) { // n != m => n != 0
+				// 		auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
+				// 		nfa.bind_transform(current_q, new_e);
+				// 		nfa.bind_empty_transform(new_q, final_q);
+				// 		current_q = new_q;
+				// 	}
+				// 	e = front_e;
+				// }
+				// nfa_stack.emplace(e, final_q, new_complexity);
 				break;
 			} 
-			// else m == n: e{m,m} = e{m}
+			// else m == n: e{m,m} == e{m}
 			[[fallthrough]];
-		case 1: // e{m}
+		case braces_result::fixed: // e{m}
 			if(m == 0) {
-				// e{0} == ε
-				// simply ignore the edge e 
+				// R{0} == ε
+				// remove useless states
+				// no need to reset the capture group
+				// states.erase(begin_state, std::next(end_state));
+				states.erase(
+					nfa_stack.has_second_top() ? std::next(nfa_stack.second_top().end_state) : states.front(), 
+					std::next(end_state)
+				)
 				nfa_stack.pop();
-				nfa_stack.emplace(edge{q}, q, 1); // -ε-> q
+			}else if(m == 1) {
+				// R{1} == R
+				// do nothing
 			}else {
-				new_complexity = psi * m;
-				if(new_complexity > max_unroll_complexity) return false;
-				nfa_stack.pop();
+				// R{m} , where m >= 2
+				
+				if((new_complexity = m * complexity) > max_unroll_complexity) return false;
 
-				state_id_t current_q = q;
-				for(size_t i = 0; i < m - 1; ++i) {
-					auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
-					nfa.bind_transform(current_q, new_e);
-					current_q = new_q;
-				}
-				nfa_stack.emplace(e, current_q, new_complexity);
+				// total m times R, copy (m - 1) times
+				// generates R...R, where R repeat m - 1 times 
+				auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(m - 1);
+				copy_end_state->add_outgoing(begin_edge);
+				
+				begin_edge = copy_begin_edge;
+				complexity = new_complexity;
 			}
 			break;
-		case 2: // e{m,}
+		case braces_result::left_bounded: // e{m,}
 			if(m == 0) {
-				// e{0,} == e*
-				nfa_stack.pop();
-				nfa.bind_transform(q, e);                // q -e->...> q
-				nfa_stack.emplace(edge{q}, q, psi + 1);  // -ε-> q
+				// R{0,} == R*
+				reduce(oper::kleene);
+			}else if(m == 1){
+				// R{1,} == R+
+				reduce(oper::positive);
 			}else {
-				// e{m,} == e ... e+
-				new_complexity = (m + 1) * psi;
- 				if(new_complexity > max_unroll_complexity) return false;
-				nfa_stack.pop();
+				// R{m,} == R ... R+
+				// (R){m,} == R ... (R)+
+ 				if((new_complexity = m * complexity + 1) > max_unroll_complexity) return false;
 
-				state_id_t current_q = q;
-				for(size_t i = 0; i < m - 1; ++i) {
-					auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
-					nfa.bind_transform(current_q, new_e);
-					current_q = new_q;
-				}
-				nfa.bind_transform(current_q, edge{e, current_q});
-				nfa_stack.emplace(e, current_q, new_complexity);
+				auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(m - 1);
+
+				reduce(oper::positive);
+
+				copy_end_state->add_outgoing(begin_edge);
+
+				begin_edge = copy_begin_edge;
+				complexity = new_complexity
 			}
 			break;
 		}
 		return true;
 
 	}
-
 
 	braces_result parse_braces(string_iterator_t& pos, const string_iterator_t& end) {
 		// m, n ::= [0-9]+
@@ -1161,9 +1187,9 @@ struct non_determinstic_finite_automaton {
 	using string_view_t = basic_string_view<char_t>;
 	using range_t = char_range<char_t>;
 
-	using state_id_t = size_t;
+	using state_iterator_t = size_t;
 
-	using state_set_t = set<state_id_t>; // type of Q or Q's subset
+	using state_set_t = set<state_iterator_t>; // type of Q or Q's subset
 
 	using final_state_set_t = state_set_t; // F: is a subset of Q
 
@@ -1180,44 +1206,44 @@ struct non_determinstic_finite_automaton {
 			// active when category == range
 			range_t range;
 			// active when category == epsilon
-			state_id_t capture_end;
+			state_iterator_t capture_end;
 		};
 
 
-		state_id_t target = -1;
+		state_iterator_t target = -1;
 
-		constexpr edge(state_id_t target = -1) noexcept: 
+		constexpr edge(state_iterator_t target = -1) noexcept: 
 			category{edge_category::epsilon}, target{target} {} // an empty(epsilon) edge
 
-		constexpr edge(edge_category category_, state_id_t target = -1) noexcept: 
+		constexpr edge(edge_category category_, state_iterator_t target = -1) noexcept: 
 			category{category_}, target{target} {}
 
-		constexpr edge(char_t c, bool invert_range_ = false, state_id_t target = -1) noexcept: 
+		constexpr edge(char_t c, bool invert_range_ = false, state_iterator_t target = -1) noexcept: 
 			category{invert_range_ ? edge_category::invert_single_char : edge_category::single_char}, single_char{c}, target{target} {}
 			
-		constexpr edge(char_t from_, char_t to_, bool invert_range_ = false, state_id_t target = -1) noexcept: 
+		constexpr edge(char_t from_, char_t to_, bool invert_range_ = false, state_iterator_t target = -1) noexcept: 
 			category{invert_range_ ? edge_category::invert_range : edge_category::range}, range{from_, to_}, target{target} {}
 		
 		constexpr edge(const edge&) noexcept = default;
-		constexpr edge(const edge& other, state_id_t target) noexcept: edge{other} {
+		constexpr edge(const edge& other, state_iterator_t target) noexcept: edge{other} {
 			target = target;
 		}
 
 	private:
-		constexpr edge(bool greedy, state_id_t target, state_id_t capture_end_) noexcept:
+		constexpr edge(bool greedy, state_iterator_t target, state_iterator_t capture_end_) noexcept:
 			category{greedy ? edge_category::greedy_capture_begin : edge_category::nongreedy_capture_begin}, 
 			capture_end{capture_end_}, 
 			target{target} {}
 	public:
 
-		static constexpr edge make_epsilon(state_id_t target = -1) noexcept{
+		static constexpr edge make_epsilon(state_iterator_t target = -1) noexcept{
 			return {target};
 		}
 
-		// static constexpr edge make_capture(bool greedy, state_id_t target, state_t capture_end) noexcept{
+		// static constexpr edge make_capture(bool greedy, state_iterator_t target, state_t capture_end) noexcept{
 		// 	return {greedy, target, capture_end};
 		// }
-		static constexpr edge make_conjunction(state_id_t target = -1) noexcept{
+		static constexpr edge make_conjunction(state_iterator_t target = -1) noexcept{
 			return {edge_category::conjunction_range, target};
 		}
 		
@@ -1279,7 +1305,7 @@ struct non_determinstic_finite_automaton {
 					return false;
 			} 	
 		}
-		edge& set_target(state_id_t index) noexcept{
+		edge& set_target(state_iterator_t index) noexcept{
 			target = index;
 			return *this;
 		}
@@ -1335,7 +1361,7 @@ struct non_determinstic_finite_automaton {
 
 		struct capture_context_item {
 			const edge& begin;  // the begin of a sub-nfa
-			const state_id_t end;  // the end of a sub-nfa
+			const state_iterator_t end;  // the end of a sub-nfa
 			const bool greedy;
 
 			const char_t* capture_begin = nullptr, 
@@ -1370,7 +1396,7 @@ struct non_determinstic_finite_automaton {
 		}; 
 
 		unordered_map<const edge*, capture_context_item> contexts;
-		unordered_map<state_id_t, capture_context_item*> contexts_ref_by_state;
+		unordered_map<state_iterator_t, capture_context_item*> contexts_ref_by_state;
 
 		bool new_context(const edge& e, const char_t* capture_begin = nullptr) {
 			auto [it, inserted] = contexts.try_emplace(&e, e, capture_begin);
@@ -1404,7 +1430,7 @@ struct non_determinstic_finite_automaton {
 			}
 			return false;
 		}
-		bool try_complete_capture(state_id_t end_state, const char_t* capture_end) {
+		bool try_complete_capture(state_iterator_t end_state, const char_t* capture_end) {
 			if(contexts_ref_by_state.count(end_state) != 0) {
 				contexts_ref_by_state[end_state]->complete_capture(capture_end);
 				return true;
@@ -1415,7 +1441,7 @@ struct non_determinstic_finite_automaton {
 		capture_context_item& get_context(const edge& e) {
 			return contexts.at(&e);
 		}
-		capture_context_item& get_context(state_id_t end_state) {
+		capture_context_item& get_context(state_iterator_t end_state) {
 			return *contexts_ref_by_state[end_state];
 		}
 
@@ -1447,7 +1473,7 @@ struct non_determinstic_finite_automaton {
 // 			state_set_t current_appended_states = current_states, 
 // 			               next_appended_states;
 // 			while(true) {
-// 				for(state_id_t q: current_appended_states) {
+// 				for(state_iterator_t q: current_appended_states) {
 // 					for(const edge& e: m[q]) {
 // 						if(e.accept_epsilon() && current_states.count(e.target) == 0) {
 // 							// e links to a new state that does not in current_states set
@@ -1469,7 +1495,7 @@ struct non_determinstic_finite_automaton {
 // 			state_set_t current_appended_states = current_states, 
 // 			               next_appended_states;
 // 			while(true) {
-// 				for(state_id_t q: current_appended_states) {
+// 				for(state_iterator_t q: current_appended_states) {
 // 					for(const edge& e: m[q]) {
 // 						if(e.accept_epsilon() && current_states.count(e.target) == 0) {
 // 							// e links to a new state that does not in current_states set
@@ -1565,10 +1591,10 @@ struct non_determinstic_finite_automaton {
 // 	}; // struct transformer
 
 // private:
-// 	state_id_t max_state_index = 0;
+// 	state_iterator_t max_state_index = 0;
 
 // public:
-// 	// static constexpr state_id_t trap_state = state_id_t(-1);
+// 	// static constexpr state_iterator_t trap_state = state_iterator_t(-1);
 
 // 	transformer delta;
 // 	final_state_set_t final_states;
@@ -1584,32 +1610,32 @@ struct non_determinstic_finite_automaton {
 	// 	delta.m.emplace_back();
 	// }
 
-	// state_id_t new_state() {
+	// state_iterator_t new_state() {
 	// 	delta.m.emplace_back();
 	// 	return ++max_state_index;
 	// }
-	// state_id_t new_state(const vector<edge>& edges) {
+	// state_iterator_t new_state(const vector<edge>& edges) {
 	// 	delta.m.emplace_back(edges);
 	// 	return ++max_state_index;
 	// }
 
-	// void mark_final_state(state_id_t index) {
+	// void mark_final_state(state_iterator_t index) {
 	// 	final_states.insert(index);
 	// }
 
-	// bool bind_transform(state_id_t index, state_id_t target_index, const edge& e) {
+	// bool bind_transform(state_iterator_t index, state_iterator_t target_index, const edge& e) {
 	// 	if(index > max_state_index or target_index > max_state_index) return false;
 
 	// 	delta.m[index].push_back(e.set_target(target_index)); // reset target
 	// 	return true;
 	// }
-	// bool bind_transform(state_id_t index, const edge& e) {
+	// bool bind_transform(state_iterator_t index, const edge& e) {
 	// 	if(index > max_state_index) return false;
 
 	// 	delta.m[index].push_back(e);
 	// 	return true;
 	// }
-	// bool bind_empty_transform(state_id_t index, state_id_t target_index) {
+	// bool bind_empty_transform(state_iterator_t index, state_iterator_t target_index) {
 	// 	if(index > max_state_index or target_index > max_state_index) return false;
 	// 	delta.m[index].emplace_back(target_index);
 	// 	return true;
@@ -1736,7 +1762,7 @@ struct regular_expression {
 	using nfa_builder_t = nfa_builder<char_t>;
 
 	// using edge = typename nfa_t::edge;
-	// using state_id_t = typename nfa_t::state_id_t;
+	// using state_iterator_t = typename nfa_t::state_iterator_t;
 
 	/*	sub expression(e) complexity(ψ) algorithm:
 		e = 
