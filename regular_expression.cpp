@@ -237,7 +237,8 @@ class nfa_builder {
 	using state_const_iterator_t = typename list<state>::const_iterator;
 	
 	state_iterator_t final_state;
-	vector<state_iterator_t> capture_groups; // capture groups' end state
+	// vector<state_iterator_t> capture_groups; // capture groups' end state
+	size_t max_capture_id = 0;
 	
 
 	// internal representation(IR) of NFA::edge
@@ -245,13 +246,17 @@ class nfa_builder {
 		edge_category category;
 		state_iterator_t target; 
 
+		struct capture_info {
+			size_t id = 0; // 0 means no capture
+			state_iterator_t end;
+		};
 		union edge_data {
 			// active when category == single_char
 			char_t single_char; 
 			// active when category == range
 			range_t range;
 			// active when category == epsilon
-			size_t capture_group_id = numeric_limits<size_t>::max();
+			capture_info capture;
 		} data; 
 
 		constexpr edge(edge_category category, char_t single_char, state_iterator_t target = {}): 
@@ -287,8 +292,8 @@ class nfa_builder {
 			return {edge_category::range, range, target};
 		}
 
-		static constexpr edge make_capture(size_t capture_group_id, state_iterator_t target = {}) noexcept{
-			return {edge_category::epsilon, capture_group_id, target};
+		static constexpr edge make_capture(size_t capture_group_id, state_iterator_t capture_end = {}, state_iterator_t target = {}) noexcept{
+			return {edge_category::epsilon, capture_info{capture_group_id, capture_end}, target};
 		}
 
 		edge& set_target(state_iterator_t target) noexcept{
@@ -300,11 +305,23 @@ class nfa_builder {
 			category = edge_category(-static_cast<underlying_type_t<edge_category>>(category));
 			return *this;
 		}
-		edge& remove_capture_id() noexcept{
-			if(category == edge_category::epsilon) data.capture_group_id = numeric_limits<size_t>::max();
-			return *this;
+
+		bool has_capture() const noexcept{
+			return category == edge_category::epsilon && data.capture.id != 0;
 		}
 
+		edge& set_capture_end(state_iterator_t capture_end) {
+			assert(has_capture());
+			// if(has_capture()) 
+			data.capture.end = capture_end;
+			return *this;
+		}
+		edge& remove_capture() noexcept{
+			// if(category == edge_category::epsilon) 
+			assert(has_capture());
+			data.capture.id = 0;
+			return *this;
+		}
 
 	}; // edge
 
@@ -423,7 +440,7 @@ public:
 		return --states.end();
 	}
 	template <typename... Args>
-	state_iterator_t insert_new_state(state_terator_t it, Arg&&... args) {
+	state_iterator_t insert_new_state(state_terator_t it, Args&&... args) {
 		return states.insert(it, {args...});
 	}
 
@@ -457,11 +474,12 @@ public:
 				break;
 			}
 			// unary operator ?, ψ(R?) = ψ(R) + 2
+			// TODO: can it correctly handle capture?
 			case oper::optional: {
 				if(nfa_stack.empty()) return false;
 				auto& [begin_edge, end_state, complexity] = nfa_stack.top();
 				
-				auto state = new_state();
+				auto state = insert_new_state(top_begin_state());
 				state->add_outgoing(begin_edge)
 				     ->add_outgoing(edge::make_epsilon(end_state));
 					 
@@ -500,11 +518,13 @@ public:
 
 				// the new branch_state must priviously be these two sub-nfa,
 				// so we must insert it before the pre_start_state's target state 
-				auto branch_state = insert_new_state(
-					nfa_stack.has_second_top() ? 
-					std::next(nfa_stack.second_top().end_state) :
-					states.front()
-				);
+				// auto branch_state = insert_new_state(
+				// 	nfa_stack.has_second_top() ? 
+				// 	std::next(nfa_stack.second_top().end_state) :
+				// 	states.front()
+				// );
+				// auto branch_state = insert_new_state_before_top_nfa();
+				auto branch_state = insert_new_state(top_begin_state());
 
 				branch_state->add_outgoing(pre_begin_edge)
 					        ->add_outgoing(begin_edge);
@@ -527,7 +547,7 @@ public:
 
 				auto& [capture_begin_edge, dummy_state, cap_complexity] = nfa_stack.top();
 				dummy_state->add_outgoing(begin_edge);
-				capture_groups[capture_begin_edge.data.capture_group_id] = end_state;
+				capture_begin_edge.set_capture_end(end_state);
 				cap_complexity += complexity;
 				break;
 			}
@@ -539,7 +559,6 @@ public:
 	}
 
 	optional<edge> lex_escape(string_iterator_t& pos, const string_iterator_t& end) {
-
 		/*
 		character escapes::
 		1. control escape
@@ -660,7 +679,14 @@ public:
 
 			case '(':
 				if(has_potential_concat_oper && !reduce_concat()) return {empty_operand, pos};
-				make_capture_group();
+				// make_capture_group();
+
+				++max_capture_id;
+				auto dummy_state = new_state();
+				edge capture_begin = edge::make_capture(max_capture_id);
+				dummy_state->add_outgoing(capture_begin, dummy_state);
+
+				nfa_stack.emplace(capture_begin, dummy_state, 1);
 				oper_stack.push(oper::lparen);
 				++pos;
 				has_potential_concat_oper = false;
@@ -704,8 +730,7 @@ public:
 			case '{': {
 				// {m}, {m,}, {m,n}  counted repetition expression
 				auto braces_res = parse_braces(++pos, s.end());
-				// get<0>(brace_res) is braces_case
-				if(get<0>(braces_res) == 0) 
+				if(braces_res.kind == braces_result::error)
 					return {bad_brace_expression, pos};
 				if(!reduce_braces(braces_res)) 
 					return {expensive_brace_expression_unroll, pos};
@@ -860,7 +885,7 @@ public:
 			// [R1...Rn]
 			// new_e: -ε-> pre_state -{e1, e2, ...en}-> post_state
 
-			auto pre_state = new_state();
+			auto pre_state = insert_new_state(post_state);
 			for(auto& e: edges) {
 				pre_state->add_outgoing(e.set_target(post_state));
 			}
@@ -882,7 +907,7 @@ public:
 		}else {
 			// [^R1...Rn], this is a conjunction range, 
 			// which means the target state(post_state) is accepted only if all of the edges(^R1, ^R2, ...) is accepted
-			auto pre_state = new_state(true); // is_conjunction = true
+			auto pre_state = insert_new_state(post_state, true); // is_conjunction = true
 
 			for(auto& e: edges) {
 				pre_state->add_outgoing(e.set_target(post_state));
@@ -892,18 +917,6 @@ public:
 		}
 	}
 
-	size_t make_capture_group() { // return the capture group id 
-
-		auto id = capture_groups.size();
-		capture_groups.emplace_back({}); // currently no capture end state now
-
-		auto dummy_state = new_state();
-		edge capture_begin = edge::make_capture(id);
-		dummy_state->add_outgoing(capture_begin, dummy_state);
-		nfa_stack.emplace(capture_begin, dummy_state, 1);
-		return id;
-	}
-
 	struct braces_result {
 		enum kind_category {
 			error = 0, 
@@ -911,7 +924,7 @@ public:
 			left_bounded, // {m,}
 			bounded, // {m, n}
 		} kind;
-		size_t down, up; // m, n
+		size_t low, high; // m, n
 
 		static constexpr make_error() noexcept {
 			return {error};
@@ -919,12 +932,12 @@ public:
 
 		friend constexpr bool operator==(const braces_result& l, const braces_result& r) noexcept {
 			if(l.kind == r.kind) {
-				return l.kind == error || l.down == r.down && l.up == r.up;
+				return l.kind == error || l.low == r.low && l.high == r.high;
 			}else return false;
 		} 
 	};
 
-	// counted loop 'R{n, m}' grammer
+	// counted loop 'R{n,m}' grammer
 	bool reduce_braces(const braces_result& braces_res) {
 		if(try_unroll_brace_expression(braces_res)) {
 			return true;
@@ -934,44 +947,55 @@ public:
 		return false; 
 	}
 
+	state_iterator_t top_begin_state() {
+		assert(!nfa_stack.empty() && !states.empty());
+		return nfa_stack.has_second_top() ? std::next(nfa_stack.second_top().end_state) : states.front();
+	}
 
-
-	subnfa copy_subnfa_before(const subnfa& nfa, state_iterator_t begin_state, bool remove_capture_id = true) {
+	// deep copy the stack top sub-nfa before itself
+	subnfa copy_before_top_subnfa(bool remove_capture = true) {
 		// deep copy a sub-nfa before the source nfa, and promise states' relative order is not changed,
 		// notice: if the source sub-nfa contains capture, 
 		// at the runtime, the captured string will be reset on the next match
 		// for example: (R){m}, it will only capture the last match string of R, but not m captures of each R match
 		// this should be handle properly.
 
-		const auto [begin_edge, end_state, complexity] = nfa;
+		// const auto [begin_edge, end_state, complexity] = nfa;
+		
+		const auto [begin_edge, end_state, complexity] = nfa_stack.top();
+		const auto begin_state = top_begin_state()
 		map<const state_iterator_t, state_iterator_t> memo;
 
 		for(auto it = begin_state; it != end_state; ++it) {
 			// memo[it] = new_state(it->is_conjunction);
 			memo[it] = insert_new_state(begin_state, it->is_conjunction)
 		}
-		if(remove_capture_id) {
+		auto copy_begin_edge = edge{begin_edge, memo[begin_edge.target]};
+
+		if(remove_capture) {
 			for(auto& [src, dst]: memo) {
 				for(auto& e: src->edges) {
-					dst->add_outgoing(edge{e, memo[e.target]}.remove_capture_id());
+					if(e.has_capture()) dst->add_outgoing(edge{e, memo[e.target]}.remove_capture());
+					else dst->add_outgoing(edge{e, memo[e.target]});
 				}
 			}
-			return {
-				edge{begin_edge, memo[begin_edge.target]}.remove_capture_id(), 
-				memo[end_state], 
-				complexity
-			}
+			if(begin_edge.has_capture()) copy_begin_edge.remove_capture();
 		}else {
+			// reserve the edges capture.id, but we should redirect capture.end 
 			for(auto& [src, dst]: memo) {
 				for(auto& e: src->edges) {
-					dst->add_outgoing(edge{e, memo[e.target]});
+					if(e.has_capture()) dst->add_outgoing(
+						edge{e, memo[e.target]}.set_capture_end(memo[e.data.capture.end])
+					);
+					else dst->add_outgoing(edge{e, memo[e.target]});
 				}
 			}
-			return {
-				edge{begin_edge, memo[begin_edge.target]}, 
-				memo[end_state], 
-				complexity
-			}
+			if(begin_edge.has_capture()) copy_begin_edge.set_capture_end(memo[begin_edge.capture.end]);
+		}
+		return {
+			copy_begin_edge, 
+			memo[end_state], 
+			complexity
 		}
 	}
 
@@ -991,17 +1015,15 @@ public:
 		auto& [begin_edge, end_state, complexity] = nfa_stack.top();
 
 		auto unroll_fixed_brace_expression = 
-			[this, begin_edge, end_state](size_t copy_count, bool remove_capture_id = true) {
+			[this](size_t copy_count, bool remove_capture = true) {
 
 			assert(copy_count >= 1);
-			
-			auto begin_state = nfa_stack.has_second_top() ? std::next(nfa_stack.second_top().end_state) : states.front();
 
-			auto [first_begin_edge, current_end_state, _] = copy_subnfa_before(nfa, begin_edge, remove_capture_id);
+			auto [first_begin_edge, current_end_state, _] = copy_before_top_subnfa(remove_capture);
 
 			for(size_t i = 0; i < copy_count - 1; ++i) {
 				auto [new_begin_edge, new_end_state, _] 
-					= copy_subnfa_before(nfa, begin_state, remove_capture_id);
+					= copy_before_top_subnfa(remove_capture);
 				
 				current_end_state->add_outgoing(new_begin_edge);
 				current_end_state = new_end_state;
@@ -1019,45 +1041,58 @@ public:
 		complexity_t new_complexity;
 		
 		switch(kind) {
-		case braces_result::bounded: // e{m,n}
+		case braces_result::bounded: // R{m,n}
 			if(m != n) {
 				// new_complexity = n * complexity + n - m;
 				if((new_complexity = n * (complexity + 1) - m) > max_unroll_complexity) return false;
-				// nfa_stack.pop();
+				
+				// (R){m,n} == R{m}(R){0,n-m}
+				// (R){m,n} == R{m-1}(R)(R){0,n-m}
+				auto begin_state = top_begin_state();
+				// construct R{m}
+				if(m == 0) {
+					// (R){0,n} == (R){1,n}?
+					auto post_end_state = new_state();
+					end_state->add_outgoing(edge::make_epsilon(post_end_state));
+					if(n != 1) {
+						auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(n - 1, false);
+						copy_end_state->add_outgoing(begin_edge);
+						begin_edge = copy_begin_edge;
+						end_state = post_end_state;
+					}
+					complexity = new_complexity;
+					reduce(oper::optional);
+				}else {
+					if(m == 1) {
+						// (R){1, n}
+						// auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(m - 1);
+						auto post_end_state = new_state();
+						end_state->add_outgoing(edge::make_epsilon(post_end_state));
+						
+						auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(n - 1, false);
+						copy_end_state->add_outgoing(begin_edge);
+						begin_edge = copy_begin_edge;
+						end_state = post_end_state;
+						complexity = new_complexity;
+					}else {
+						// m > 1
+						// TODO: needs more optimization
+						auto [pre_copy_begin_edge, pre_copy_end_state, _] = unroll_fixed_brace_expression(m - 1);
 
-				// TODO
-				// state_iterator_t current_q = q;
-				// state_iterator_t final_q = nfa.new_state();
-				// if(m != 0) {
-				// 	for(size_t i = 0; i <= m - 1; ++i) { // loop m - 1 times
-				// 		auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
-				// 		nfa.bind_transform(current_q, new_e);
-				// 		current_q = new_q;
-				// 	}
-				// 	nfa.bind_empty_transform(current_q, final_q);
-				// 	for(size_t i = 0; i < n - m; ++i) {
-				// 		auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
-				// 		nfa.bind_transform(current_q, new_e);
-				// 		nfa.bind_empty_transform(current_q, final_q);
-				// 		current_q = new_q;
-				// 	}
-				// }else {
-				// 	edge front_e = {nfa.new_state()};
-				// 	nfa.bind_empty_transform(front_e.target, final_q);
-				// 	nfa.bind_transform(front_e.target, e);
-				// 	nfa.bind_empty_transform(current_q, final_q);
-				// 	for(size_t i = 0; i < n - 1; ++i) { // n != m => n != 0
-				// 		auto [new_e, new_q] = nfa.copy_sub_expression(e, q);
-				// 		nfa.bind_transform(current_q, new_e);
-				// 		nfa.bind_empty_transform(new_q, final_q);
-				// 		current_q = new_q;
-				// 	}
-				// 	e = front_e;
-				// }
-				// nfa_stack.emplace(e, final_q, new_complexity);
+						auto post_end_state = new_state();
+						end_state->add_outgoing(edge::make_epsilon(post_end_state));
+						
+						auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(n - 1, false);
+						copy_end_state->add_outgoing(begin_edge);
+						pre_copy_end_state->add_outgoing(copy_begin_edge);
+
+						begin_edge = pre_copy_begin_edge;
+						end_state = post_end_state;
+						complexity = new_complexity;
+					}
+				}
 				break;
-			} 
-			// else m == n: e{m,m} == e{m}
+			} // else m == n: e{m,m} == e{m}
 			[[fallthrough]];
 		case braces_result::fixed: // e{m}
 			if(m == 0) {
@@ -1066,7 +1101,7 @@ public:
 				// no need to reset the capture group
 				// states.erase(begin_state, std::next(end_state));
 				states.erase(
-					nfa_stack.has_second_top() ? std::next(nfa_stack.second_top().end_state) : states.front(), 
+					top_begin_state(),
 					std::next(end_state)
 				)
 				nfa_stack.pop();
