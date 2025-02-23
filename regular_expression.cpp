@@ -1048,12 +1048,13 @@ public:
 				
 				// (R){m,n} == R{m}(R){0,n-m}
 				// (R){m,n} == R{m-1}(R)(R){0,n-m}
+				
+				// TODO: too many branches, need to be optimized
 				auto begin_state = top_begin_state();
-				// construct R{m}
 				if(m == 0) {
-					// (R){0,n} == (R){1,n}?
 					auto post_end_state = new_state();
 					end_state->add_outgoing(edge::make_epsilon(post_end_state));
+					// (R){0,n} == (R){1,n}?
 					if(n != 1) {
 						auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(n - 1, false);
 						copy_end_state->add_outgoing(begin_edge);
@@ -1062,34 +1063,32 @@ public:
 					}
 					complexity = new_complexity;
 					reduce(oper::optional);
+				}else if(m == 1) {
+					// (R){1, n}
+					// auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(m - 1);
+					auto post_end_state = new_state();
+					end_state->add_outgoing(edge::make_epsilon(post_end_state));
+					
+					auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(n - 1, false);
+					copy_end_state->add_outgoing(begin_edge);
+
+					begin_edge = copy_begin_edge;
+					end_state = post_end_state;
+					complexity = new_complexity;
 				}else {
-					if(m == 1) {
-						// (R){1, n}
-						// auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(m - 1);
-						auto post_end_state = new_state();
-						end_state->add_outgoing(edge::make_epsilon(post_end_state));
-						
-						auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(n - 1, false);
-						copy_end_state->add_outgoing(begin_edge);
-						begin_edge = copy_begin_edge;
-						end_state = post_end_state;
-						complexity = new_complexity;
-					}else {
-						// m > 1
-						// TODO: needs more optimization
-						auto [pre_copy_begin_edge, pre_copy_end_state, _] = unroll_fixed_brace_expression(m - 1);
+					// m > 1
+					auto [pre_copy_begin_edge, pre_copy_end_state, _] = unroll_fixed_brace_expression(m - 1);
 
-						auto post_end_state = new_state();
-						end_state->add_outgoing(edge::make_epsilon(post_end_state));
-						
-						auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(n - 1, false);
-						copy_end_state->add_outgoing(begin_edge);
-						pre_copy_end_state->add_outgoing(copy_begin_edge);
+					auto post_end_state = new_state();
+					end_state->add_outgoing(edge::make_epsilon(post_end_state));
+					
+					auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(n - m, false);
+					copy_end_state->add_outgoing(begin_edge);
+					pre_copy_end_state->add_outgoing(copy_begin_edge);
 
-						begin_edge = pre_copy_begin_edge;
-						end_state = post_end_state;
-						complexity = new_complexity;
-					}
+					begin_edge = pre_copy_begin_edge;
+					end_state = post_end_state;
+					complexity = new_complexity;
 				}
 				break;
 			} // else m == n: e{m,m} == e{m}
