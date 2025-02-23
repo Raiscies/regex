@@ -109,11 +109,7 @@ enum edge_category: char {
 	newlines    = 6, // [\n\r](currently unused)
 	all         = 7, // any chars
 
-
-	// conjunction_range = 8, // a flag to mark the start state of this edge requires all of the edges it come from are accepted (conjunction)
-	
-	
-	// // inverted ranges 
+	// inverted ranges 
 	invert_single_char = -single_char,  // [^c]
 	invert_range       = -range,        // [^from-to]
 	non_spaces         = -spaces,       // [^\f\n\r\t\v]
@@ -125,73 +121,48 @@ enum edge_category: char {
 	none               = -all,           // nothing could be accepted
 	
 	
-	// some special edge, for internal implementation
 
-	// identify the begin of sub-nfa, for capture grammer "(R)" 
-	// greedy or not non-greedy, which are also epsilon edges
-	// greedy_capture_begin = numeric_limits<underlying_type_t<edge_category>>::min(),        // (R)
-	// nongreedy_capture_begin = numeric_limits<underlying_type_t<edge_category>>::min() + 1, 
 };
 
-
-// struct edge_category {
-
-// 	bool is_invert: 1 = false;
-// 	bool is_conjunction: 1 = false;
-// 	range_category category: 6;
-	
-// 	constexpr edge_category(range_category category, bool is_invert = false, bool is_conjunction = false) noexcept: 
-// 		is_invert{is_invert}, is_conjunction{is_conjunction}, category{category} {}
-
-// 	static constexpr edge_category epsilon    () noexcept { return {epsilon}; }
-// 	static constexpr edge_category single_char() noexcept { return {single_char}; }
-// 	static constexpr edge_category range      () noexcept { return {range}; }
-// 	static constexpr edge_category spaces     () noexcept { return {spaces}; }
-// 	static constexpr edge_category words      () noexcept { return {words}; }
-// 	static constexpr edge_category digits     () noexcept { return {digits}; }
-// 	static constexpr edge_category newlines   () noexcept { return {newlines}; }
-// 	static constexpr edge_category all        () noexcept { return {all}; }
-
-// 	static constexpr edge_category exclude_single_char() noexcept { return {single_char, true}; }
-// 	static constexpr edge_category exclude_range      () noexcept { return {range, true}; }
-// 	static constexpr edge_category non_spaces         () noexcept { return {spaces, true}; }
-// 	static constexpr edge_category non_words          () noexcept { return {words, true}; }
-// 	static constexpr edge_category non_digits         () noexcept { return {digits, true}; }
-// 	static constexpr edge_category non_newlines       () noexcept { return {newlines, true}; }
-// 	static constexpr edge_category none               () noexcept { return {all, true}; }
-
-// 	friend constexpr bool operator==(const edge_category l, const edge_category& r) noexcept {
-// 		return l.category == r.category && l.is_invert == r.is_invert;
-// 	}
-// 	friend constexpr bool operator!=(const edge_category l, const edge_category& r) noexcept {
-// 		return !(l == r);
-// 	}
-
-// 	constexpr edge_category& invert() noexcept {
-// 		this->is_invert = !is_invert;
-// 		return *this;
-// 	}
-// 	constexpr edge_category& set_conjunction(bool is_conjunction = true) noexcept {
-// 		this->is_conjunction = is_conjunction;
-// 		return *this;
-// 	}
-// };
-
-
 template <typename CharT>
-struct non_determinstic_automaton;
+struct non_determinstic_finite_automaton;
 
 template <typename CharT> 
 class nfa_builder {
 	// a non-determinstic-finite-automaton factory
-	// NFA M = (Q, Σ, δ, q0, F) 
+	// NFA M = (Q, Σ, δ, q0, f) 
+	
+	/*	sub expression(e) complexity(ψ) algorithm:
+		R = 
+			R or [] or [R] or [^] or [^R]   (R is a single range/edge)
+			             : ψ(R) = 1
+			[R1R2...Rn]  : ψ(R) = n + 1               (n > 1)
+			[^R1R2...Rn] : ψ(R) = n + 2               (n > 1)
+			R1 | R2      : ψ(R) = ψ(R1) + ψ(R2) + 3
+			R1 R2        : ψ(R) = ψ(R1) + ψ(R2)
+			R1*          : ψ(R) = ψ(R1) + 1
+			R1+          : ψ(R) = 2ψ(R1)
+			R1?          : ψ(R) = ψ(R1) + 2
+			R1{m}        : ψ(R) = mψ(R1)              (if ψ(R) <= max_unroll_complexity)
+			R1{m,}       : ψ(R) = (m + 1)ψ(R1)        (if ψ(R) <= max_unroll_complexity)
+			R1{m,n}      : ψ(R) = nψ(R1) + (n - m)    (if ψ(R) <= max_unroll_complexity)
+
+		if ψ(R) <= max_unroll_complexity: 
+			using trivial unroll algorithm: 
+				R{m}   -> R...R for m times R;
+				R{m,}  -> R...R+ for m times R;
+				R{m,n} -> R...R(R?...R?) for m times R and n - m times (R?)
+		else: 
+			TODO: using loop algorithm for the sub expression. 
+	*/
+
 	
 	using char_t = CharT;
 	using range_t = char_range<char_t>;
 	using string_view_t = basic_string_view<char_t>;
 	using string_iterator_t_t = typename string_view_t::const_iterator;
 
-	using nfa_t = non_determinstic_automaton<char_t>;
+	using nfa_t = non_determinstic_finite_automaton<char_t>;
 
 	// using state_iterator_t = size_t;
 
@@ -199,8 +170,12 @@ class nfa_builder {
 
 	// indicate a sub nfa's complexity
 	using complexity_t = size_t;
+	
+	using state_id_t = size_t;
+	
 	static constexpr complexity_t default_unroll_complexity = 2000;
 	complexity_t max_unroll_complexity = default_unroll_complexity;
+
 
 	
 	constexpr nfa_builder() {}
@@ -213,6 +188,9 @@ class nfa_builder {
 		// out-going edges
 		vector<edge> edges;
 		bool is_conjunction = false;
+
+		// this will be assigned after parsing
+		state_id_t state_id;
 		
 		constexpr state() noexcept = default;
 		constexpr state(bool is_conjunction) noexcept: 
@@ -227,7 +205,16 @@ class nfa_builder {
 			this->is_conjunction = is_conjunction;
 			return this;
 		}
-		
+
+		nfa_t::state generate() const{
+			nfa_t::state s;
+			for(const auto& e: edges) {
+				s.states.push_back(e.generate());
+			}
+			// do weed need this?
+			s.is_conjunction = is_conjunction;
+			return s;
+		}
 	}; // state
 
 	// vector<unique_ptr<state>> states;
@@ -323,8 +310,35 @@ class nfa_builder {
 			return *this;
 		}
 
-	}; // edge
+		nfa_t::edge generate() const{
+			
+			nfa_t::edge res{
+				category, 
+				target->state_id
+			}
+			switch(category) {
+				case edge_category::single_char: 
+				case edge_category::invert_single_char:
+					res.data.single_char = data.single_char;
+					return res;
+				case edge_category::range: 
+				case edge_category::invert_range:
+					res.data.range = data.range;
+					return res;
+				case edge_category::epsilon: 
+					res.data.capture = {
+						data.capture.id, 
+						data.capture.end->state_id
+					};
+					return res;
+				default:
+					// whatever
+					return res;
+			}
 
+		}
+
+	}; // edge
 	struct subnfa {
 		edge begin_edge;
 
@@ -361,6 +375,7 @@ class nfa_builder {
 
 	enum error_category {
 		success = 0,
+		ready, 
 		empty_pattern, 
 		empty_operand, 
 		bad_escape, 
@@ -368,7 +383,7 @@ class nfa_builder {
 		bad_bracket_expression,
 		bad_brace_expression,
 		expensive_brace_expression_unroll
-	};
+	} build_result;
 
 
 	static constexpr oper to_oper(char_t c) noexcept{
@@ -387,6 +402,7 @@ class nfa_builder {
 	static constexpr string_view error_message(error_category category) noexcept{
 		switch(category) {
 		case success:                return "successed";
+		case ready:                  return "ready to build";
 		case empty_operand:          return "empty operand";
 		case bad_escape:             return "bad escape";
 		case missing_paren:          return "missing parentheses";
@@ -431,6 +447,7 @@ public:
 		states.clear();
 		final_state = nullptr;
 		capture_groups.clear();
+		build_result = ready;
 	}
 
 	template <typename... Args>
@@ -479,11 +496,11 @@ public:
 				if(nfa_stack.empty()) return false;
 				auto& [begin_edge, end_state, complexity] = nfa_stack.top();
 				
-				auto state = insert_new_state(top_begin_state());
-				state->add_outgoing(begin_edge)
+				auto pre_state = insert_new_state(top_begin_state());
+				pre_state->add_outgoing(begin_edge)
 				     ->add_outgoing(edge::make_epsilon(end_state));
 					 
-				begin_edge = edge::make_epsilon(state);
+				begin_edge = edge::make_epsilon(pre_state);
 				complexity += 2;
 				
 				break;
@@ -650,7 +667,7 @@ public:
 		
 		reset();
 		
-		if(s.empty()) return {empty_pattern, nullptr};
+		if(s.empty()) return {build_result = empty_pattern, nullptr};
 
 		bool has_potential_concat_oper = false;
 		
@@ -661,7 +678,7 @@ public:
 			case '?': // optional,         (r)? ::= (r)|ε
 
 				// *, +, ? have the highest priorities, so directly reduce it
-				if(!reduce(to_oper(*pos))) return {empty_operand, pos};
+				if(!reduce(to_oper(*pos))) return {build_result = empty_operand, pos};
 				++pos;
 				has_potential_concat_oper = true;
 				break;
@@ -669,7 +686,7 @@ public:
 			case '|':
 				// alternative / 'or' operator
 				while(!oper_stack.empty() && priority(oper_stack.top()) >= priority(oper::alter)) {
-					if(!reduce()) return {empty_operand, pos};
+					if(!reduce()) return {build_result = empty_operand, pos};
 					oper_stack.pop();
 				}
 				oper_stack.push(oper::alter);
@@ -678,7 +695,7 @@ public:
 				break;
 
 			case '(':
-				if(has_potential_concat_oper && !reduce_concat()) return {empty_operand, pos};
+				if(has_potential_concat_oper && !reduce_concat()) return {build_result = empty_operand, pos};
 				// make_capture_group();
 
 				++max_capture_id;
@@ -694,11 +711,11 @@ public:
 
 			case ')':
 				while(!oper_stack.empty() && oper_stack.top() != oper::lparen) {
-					if(!reduce()) return {empty_operand, pos};
+					if(!reduce()) return {build_result = empty_operand, pos};
 					oper_stack.pop();
 				}
 
-				if(oper_stack.empty()) return {missing_paren, pos}; // error: missing left paren '('
+				if(oper_stack.empty()) return {build_result = missing_paren, pos}; // error: missing left paren '('
 				else {
 					// the top must be lparen '(', reduce it to build a capture
 					reduce();
@@ -710,18 +727,18 @@ public:
 
 			case '[': {
 				// [c...] bracket expression
-				if(++pos == s.end()) return {bad_bracket_expression, pos};
+				if(++pos == s.end()) return {build_result = bad_bracket_expression, pos};
 				bool invert_range = false;
 				if(*pos == '^') {
 					invert_range = true;
 					++pos;
 				}
 				if(auto brackets_res = parse_brackets(pos, s.end()); brackets_res.has_value()) {
-					if(has_potential_concat_oper && !reduce_concat()) return {empty_operand, pos};
+					if(has_potential_concat_oper && !reduce_concat()) return {build_result = empty_operand, pos};
 
 					if(!invert_range) reduce_brackets(brackets_res.value());
 					else              reduce_brackets_invert(brackets_res.value()); 
-				}else return {bad_bracket_expression, pos};
+				}else return {build_result = bad_bracket_expression, pos};
 				
 				has_potential_concat_oper = true;
 				break;
@@ -731,9 +748,9 @@ public:
 				// {m}, {m,}, {m,n}  counted repetition expression
 				auto braces_res = parse_braces(++pos, s.end());
 				if(braces_res.kind == braces_result::error)
-					return {bad_brace_expression, pos};
+					return {build_result = bad_brace_expression, pos};
 				if(!reduce_braces(braces_res)) 
-					return {expensive_brace_expression_unroll, pos};
+					return {build_result = expensive_brace_expression_unroll, pos};
 				has_potential_concat_oper = true;
 				break;
 
@@ -746,7 +763,7 @@ public:
 					// escape
 					if(auto lex_res = lex_escape(++pos, s.end()); lex_res.has_value()) 
 						e = lex_res.value();
-					else return {bad_escape, pos};
+					else return {build_result = bad_escape, pos};
 					// pos has been moved at lex_escape(), so don't need to ++pos;
 					break;
 				case '.':
@@ -761,7 +778,7 @@ public:
 				
 				e.set_target(new_state());
 				if(has_potential_concat_oper && !reduce_concat()) {
-					return {empty_operand, pos};
+					return {build_result = empty_operand, pos};
 				}
 				// push char
 				nfa_stack.emplace(e, e.target, 1);
@@ -776,9 +793,9 @@ public:
 		while(!oper_stack.empty()) {
 			if(oper_stack.top() == oper::lparen) {
 				// missing right paren ')'
-				return {missing_paren, s.end()};
+				return {build_result = missing_paren, s.end()};
 			}else if(!reduce()) {
-				return {empty_operand, s.end()};			
+				return {build_result = empty_operand, s.end()};			
 			}
 			oper_stack.pop();
 		}
@@ -790,8 +807,12 @@ public:
 		insert_new_state(states.begin())->add_outgoing(nfa_stack.top().begin_edge);
 		final_state = nfa_stack.top().end_state;
 
+		// assign states' id
+		state_id_t id = 0;
+		for(auto& s: states) s->state_id = id++;
+
 		nfa_stack.clear();
-		return {success, s.end()};
+		return {build_result = success, s.end()};
 	}
 
 	bool reduce_concat() {
@@ -1192,6 +1213,26 @@ public:
 		return {kind, m, n};
 	}
 
+	// generate a nfa as our result
+	nfa_t generate() {
+		if(build_result != success) {
+			return {}; // return a empty nfa
+		}
+
+		nfa_t nfa(states.size());
+
+		auto it = states.cbegin();
+		auto nfa_it = nfa.states.begin();
+		while(it != states.cend()) {
+			*nfa_it = it->generate();
+			++it;
+			++nfa_it;
+		}
+		nfa.final_state = final_state->state_id;
+		nfa.max_capture_id = max_capture_id;
+		return nfa;
+	}
+
 private:
 
 	static constexpr int hex_val(char_t x) noexcept{
@@ -1204,94 +1245,51 @@ private:
 			return (x - 'A') + 10;
 		}
 	}
-
-	nfa_t generate() {
-
-	}
+	
 
 }; // nfa_builder
 
 template <typename CharT>
 struct non_determinstic_finite_automaton {
+	// output of nfa_builder, 
 	// a non-determinstic-finite-automaton(NFA)
 
 
-	// NFA M = (Q, Σ, δ, q0, F) 
+	// NFA M = (Q, Σ, δ, q0, f) 
 	using char_t = CharT; // Σ
-	using string_view_t = basic_string_view<char_t>;
+	// using string_view_t = basic_string_view<char_t>;
 	using range_t = char_range<char_t>;
 
-	using state_iterator_t = size_t;
+	// using result_t = vector<string_view_t>;
 
-	using state_set_t = set<state_iterator_t>; // type of Q or Q's subset
+	using nfa_builder_t = nfa_builder<char_t>;
 
-	using final_state_set_t = state_set_t; // F: is a subset of Q
-
-	using result_t = vector<string_view_t>;
+	using state_id_t = size_t;
 
 	struct edge {
-		
 
 		edge_category category;
-		
-		union{
-			// active when category == single_char
-			char_t single_char; 
-			// active when category == range
+		state_id_t target;
+		struct capture_info {
+			size_t id = 0;
+			state_id_t end;
+		}
+
+		union edge_data {
+			char_t single_char;
 			range_t range;
-			// active when category == epsilon
-			state_iterator_t capture_end;
-		};
+			capture_info capture;
+		} data;
 
-
-		state_iterator_t target = -1;
-
-		constexpr edge(state_iterator_t target = -1) noexcept: 
-			category{edge_category::epsilon}, target{target} {} // an empty(epsilon) edge
-
-		constexpr edge(edge_category category_, state_iterator_t target = -1) noexcept: 
-			category{category_}, target{target} {}
-
-		constexpr edge(char_t c, bool invert_range_ = false, state_iterator_t target = -1) noexcept: 
-			category{invert_range_ ? edge_category::invert_single_char : edge_category::single_char}, single_char{c}, target{target} {}
-			
-		constexpr edge(char_t from_, char_t to_, bool invert_range_ = false, state_iterator_t target = -1) noexcept: 
-			category{invert_range_ ? edge_category::invert_range : edge_category::range}, range{from_, to_}, target{target} {}
-		
-		constexpr edge(const edge&) noexcept = default;
-		constexpr edge(const edge& other, state_iterator_t target) noexcept: edge{other} {
-			target = target;
-		}
-
-	private:
-		constexpr edge(bool greedy, state_iterator_t target, state_iterator_t capture_end_) noexcept:
-			category{greedy ? edge_category::greedy_capture_begin : edge_category::nongreedy_capture_begin}, 
-			capture_end{capture_end_}, 
-			target{target} {}
-	public:
-
-		static constexpr edge make_epsilon(state_iterator_t target = -1) noexcept{
-			return {target};
-		}
-
-		// static constexpr edge make_capture(bool greedy, state_iterator_t target, state_t capture_end) noexcept{
-		// 	return {greedy, target, capture_end};
-		// }
-		static constexpr edge make_conjunction(state_iterator_t target = -1) noexcept{
-			return {edge_category::conjunction_range, target};
-		}
-		
 
 		bool accept(char_t c) const noexcept{
-			switch(category) {
+			switch(this->category) {
 			case edge_category::epsilon: 
-			// case edge_category::greedy_capture_begin:
-			// case edge_category::nongreedy_capture_begin:
 				return false; 
 			case edge_category::single_char: // range of one char [from]
-				return c == single_char;
+				return c == data.single_char;
 			case edge_category::range:       // range: [from-to]
-				return in_range(range, c);
+				return in_range(data.range, c);
 			case edge_category::spaces:      // space chars: [\t\n\v\f\r] == [\x09-\x0d]
 				return in_range('\x09', '\x0d', c);
 			case edge_category::words:       // identifier chars(words): [0-9a-zA-Z_]
@@ -1309,9 +1307,9 @@ struct non_determinstic_finite_automaton {
 			case edge_category::non_newlines:       // [^\n\r]
 				return c != '\n' && c != '\r';
 			case edge_category::invert_single_char: // [^c]
-				return c != single_char;
+				return c != data.single_char;
 			case edge_category::invert_range:       // [^from-to]
-				return !in_range(range, c);
+				return !in_range(data.range, c);
 			case edge_category::non_spaces:         // [^\t\n\v\f\r]
 				return !in_range('\x09', '\x0d', c);
 			case edge_category::non_words:          // [^0-9a-zA-Z_]
@@ -1330,7 +1328,7 @@ struct non_determinstic_finite_automaton {
 
 		}
 		bool accept_epsilon() const noexcept{
-			switch(category) {
+			switch(this->category) {
 				case edge_category::epsilon:
 				// case edge_category::greedy_capture_begin:
 				// case edge_category::nongreedy_capture_begin:
@@ -1339,158 +1337,101 @@ struct non_determinstic_finite_automaton {
 					return false;
 			} 	
 		}
-		edge& set_target(state_iterator_t index) noexcept{
-			target = index;
-			return *this;
-		}
 
-		edge& set_range(char_t from_, char_t to_, bool invert_range_ = false) noexcept{
-			// from = from_;
-			// to = to_;
-			range = {from_, to_};
-			category = invert_range_ ? edge_category::invert_range : edge_category::range;
-			return *this;
-		}
-		edge& set_range(char_t c, bool invert_range_ = false) noexcept{
-			single_char = c;
-			category = invert_range_ ? edge_category::invert_single_char : edge_category::single_char;
-			return *this;
-		}
-		edge& set_range(edge_category category_) noexcept{
-			category = category_;
-			return *this;
-		}
-
-
-		edge& invert() noexcept{
-			category = edge_category(-static_cast<underlying_type_t<edge_category>>(category));
-			return *this;	
-		}
 		bool is_single_char() const noexcept{
-			return category == edge_category::single_char;
-		}
-		bool is_conjunction_range() const noexcept{
-			return category == edge_category::conjunction_range;
+			return this->category == edge_category::single_char;
 		}
 
-		// bool is_capture_start() const noexcept{
-		// 	return category == edge_category::greedy_capture_begin || 
-		// 	       category == edge_category::nongreedy_capture_begin;
-		// }
+		bool is_range() const noexcept{
+			return this->category == edge_category::range;
+		}
 
-		// bool is_greedy_capture() const noexcept{
-		// 	return category == edge_category::greedy_capture_begin;
-		// }
-		// bool is_non_greedy_capture() const noexcept{
-		// 	return category == edge_category::nongreedy_capture_begin;
-		// }
+		bool is_capture_begin() const noexcept{
+			return this->category == edge_category::epsilon && this->data.capture.id != 0;
+		}
+
+		edge_category get_category() const noexcept{
+			return this->category;
+		}
+
+		nfa_builder_t::edge::capture_info get_capture() const noexcept{
+			return this->data.capture;
+		}
+
 
 	}; // struct edge
 
+	struct state {
+		
+		vector<edge> edges;
+		bool is_conjunction = false;
+		
+	};
+
+	vector<state> states;
+	state_id_t final_state = 0;
+	size_t max_capture_id = 0;
+
+	friend class nfa_builder_t;
+
+protected:
+	
+	// build it from nfa_builder
+	non_determinstic_finite_automaton() noexcept = default;
+	non_determinstic_finite_automaton(size_t state_count): states(state_count) {}
+
+}; // struct non_determinstic_finite_automaton
+
+template <typename CharT>
+struct regular_expression_engine {
+
+	using char_t = char;
+	using string_view_t = basic_string_view<char_t>;
+	using nfa_t = non_determinstic_finite_automaton<char_t>;
 
 	// stores the contexts of captures in running nfa
-	struct capture_contexts {
+	// use during runtime
+	struct state_context {
 
-		capture_contexts() = default;
+		struct capture {
+			using iterator_t = string_view_t::const_iterator;
 
-		struct capture_context_item {
-			const edge& begin;  // the begin of a sub-nfa
-			const state_iterator_t end;  // the end of a sub-nfa
-			const bool greedy;
+			iterator_t begin, end;
 
-			const char_t* capture_begin = nullptr, 
-			            * capture_end = nullptr;
 			bool completed = false;
 
-			constexpr capture_context_item(const edge& begin_, const char_t* capture_begin_ = nullptr) noexcept: begin{begin_}, end{begin_.capture_end}, greedy{begin.is_greedy_capture()}, capture_begin{capture_begin_} {}
+			constexpr capture(iterator_t begin = {}) noexcept: begin{begin}, end{std::next(begin)} {}
 
-			constexpr capture_context_item() noexcept {}
+			capture& advance(size_t count = 1) noexcept{
+				assert(begin != iterator_t{});
 
-			void reset_capture(const char_t* new_begin = nullptr) noexcept{
-				capture_begin = new_begin;
-				capture_end = nullptr;
+				std::advance(end, count);
+				return *this;
+			}
+			
+			capture& reset_capture(iterator_t new_begin = {}) noexcept{
+				begin = new_begin;
+				end = new_begin;
 				completed = false;
+				return *this;
 			}
+		};
 
-			void complete_capture(const char_t* end) noexcept{
-				if(!completed or greedy) {
-					capture_end = end;
-					completed = true;
-				}
-			}
+		vector<capture> captures;
 
-			string_view_t get_capture() const noexcept{
-				if(capture_begin != nullptr && capture_end != nullptr) 
-					// capture_begin is pointing to the position that ahead of the first char of the capture
-					return {capture_begin + 1, static_cast<size_t>(capture_end - capture_begin)};
-				else 
-					return {};
-			}
+		state_context() = default;
 
-		}; 
+	}; // struct state_context
+	
+	const nfa_t& nfa;
 
-		unordered_map<const edge*, capture_context_item> contexts;
-		unordered_map<state_iterator_t, capture_context_item*> contexts_ref_by_state;
+	vector<state_context> contexts;
 
-		bool new_context(const edge& e, const char_t* capture_begin = nullptr) {
-			auto [it, inserted] = contexts.try_emplace(&e, e, capture_begin);
-			if(inserted) {
-				contexts_ref_by_state.try_emplace(e.capture_end, &it->second);
-			}
+	regular_expression_engine(const nfa_t& nfa) noexcept: nfa{nfa}, contexts(nfa.states.size()) {}
 
-			return inserted;
-		}
+	
 
-		// reset context by the edge if it's already exists, or else create a new context
-		void reset_capture(const edge& e, const char_t* capture_begin = nullptr) {
-			if(not new_context(e, capture_begin)) {
-				contexts.at(&e).reset_capture(capture_begin);
-			}
-		}
-
-		void reset_all_captures() {
-			// reset all of the capture items
-			for(capture_context_item& ctx: contexts) {
-				ctx.reset_capture();
-			}
-		}
-
-		// always assume the arguments are valid 
-
-		bool try_complete_capture(const edge& e, const char_t* capture_end) {
-			if(contexts.count(&e) != 0) {
-				contexts.at(&e).complete_capture(capture_end);
-				return true;
-			}
-			return false;
-		}
-		bool try_complete_capture(state_iterator_t end_state, const char_t* capture_end) {
-			if(contexts_ref_by_state.count(end_state) != 0) {
-				contexts_ref_by_state[end_state]->complete_capture(capture_end);
-				return true;
-			}
-			return false;
-		}
-
-		capture_context_item& get_context(const edge& e) {
-			return contexts.at(&e);
-		}
-		capture_context_item& get_context(state_iterator_t end_state) {
-			return *contexts_ref_by_state[end_state];
-		}
-
-		result_t get_result() const{
-			result_t captures;
-			for(auto& kv: contexts) {
-				const capture_context_item& context = kv.second;
-				// auto& [eptr, context] = kv;
-				if(context.completed) 
-					captures.push_back(context.get_capture());
-			}
-			return captures;
-		}
-
-	}; // struct capture_contexts
+}; // struct regular_expression_engine
 
 
 	// δ: Q * (Σ ∪ {ε}) -> 2^Q
@@ -1501,7 +1442,7 @@ struct non_determinstic_finite_automaton {
 
 // 		// capture_context context;
 
-// 		// do_epsilon_closure, without capture_contexts
+// 		// do_epsilon_closure, without state_context
 // 		state_set_t& do_epsilon_closure(state_set_t& current_states) const{
 // 			// do ε-closure(current_states) and assign to itself
 // 			state_set_t current_appended_states = current_states, 
@@ -1524,7 +1465,7 @@ struct non_determinstic_finite_automaton {
 // 			}
 // 		}
 
-// 		state_set_t& do_epsilon_closure(state_set_t& current_states, const char_t* pos, capture_contexts& contexts) const{
+// 		state_set_t& do_epsilon_closure(state_set_t& current_states, const char_t* pos, state_context& contexts) const{
 // 			// do ε-closure(current_states) and assign to itself
 // 			state_set_t current_appended_states = current_states, 
 // 			               next_appended_states;
@@ -1550,7 +1491,7 @@ struct non_determinstic_finite_automaton {
 // 			}
 // 		}
 
-// 		// without capture_contexts
+// 		// without state_context
 // 		state_set_t operator()(const state_set_t& current_states, char_t c) const{
 // 			// assume ε-closure(current_states) == current_states
 
@@ -1583,127 +1524,75 @@ struct non_determinstic_finite_automaton {
 // 			// return do_epsilon_closure(new_states);
 // 		}
 
-		state_set_t operator()(const state_set_t& current_states, const char_t* pos, capture_contexts& contexts) const{
-				// assume ε-closure(current_states) == current_states
+		// state_set_t operator()(const state_set_t& current_states, const char_t* pos, state_context& contexts) const{
+		// 		// assume ε-closure(current_states) == current_states
 
-			if(current_states.empty()) return {};
-			state_set_t new_states;
-			char_t c = *pos;
+		// 	if(current_states.empty()) return {};
+		// 	state_set_t new_states;
+		// 	char_t c = *pos;
 
-			for(auto q: current_states) {
-				// for each protential current state
-				if(m[q].empty()) continue;
-				else if(auto first_edge = m[q][0]; first_edge.is_conjunction_range()) {
-					// this state and its edges are conjunction
-					// c is accepted only when all of the edges are accepted 
-					for(auto it = ++m[q].cbegin(); it != m[q].cend(); ++it)
-						if(!it->accept(c)) goto next_state;
+		// 	for(auto q: current_states) {
+		// 		// for each protential current state
+		// 		if(m[q].empty()) continue;
+		// 		else if(auto first_edge = m[q][0]; first_edge.is_conjunction_range()) {
+		// 			// this state and its edges are conjunction
+		// 			// c is accepted only when all of the edges are accepted 
+		// 			for(auto it = ++m[q].cbegin(); it != m[q].cend(); ++it)
+		// 				if(!it->accept(c)) goto next_state;
 
-					// this conjunction range is accepted
-					new_states.insert(first_edge.target);
-					contexts.try_complete_capture(first_edge.target, pos);
+		// 			// this conjunction range is accepted
+		// 			new_states.insert(first_edge.target);
+		// 			contexts.try_complete_capture(first_edge.target, pos);
 
-					next_state:;
-				}else {
-					for(const edge& e: m[q]) {
-						// for each range
-						if(e.accept(c)) {
-							new_states.insert(e.target);
+		// 			next_state:;
+		// 		}else {
+		// 			for(const edge& e: m[q]) {
+		// 				// for each range
+		// 				if(e.accept(c)) {
+		// 					new_states.insert(e.target);
 
-							// try to complete the state if it is a end state of a sub nfa,
-							// or else do nothing.
-							contexts.try_complete_capture(e.target, pos);
-						}
-					} 
-				}
-			}
-			// does not do_epsilon_closure anymore
-			return new_states;
-			// return do_epsilon_closure(new_states, pos, contexts);
-		}
+		// 					// try to complete the state if it is a end state of a sub nfa,
+		// 					// or else do nothing.
+		// 					contexts.try_complete_capture(e.target, pos);
+		// 				}
+		// 			} 
+		// 		}
+		// 	}
+		// 	// does not do_epsilon_closure anymore
+		// 	return new_states;
+		// 	// return do_epsilon_closure(new_states, pos, contexts);
+		// }
 
 // 	}; // struct transformer
 
-// private:
-// 	state_iterator_t max_state_index = 0;
+	// // only check if the target is acceptable, but not capture anything 
+	// bool test(string_view_t target, state_set_t start_states = {0}) const{
+	// 	if(start_states.empty()) return false;
 
-// public:
-// 	// static constexpr state_iterator_t trap_state = state_iterator_t(-1);
+	// 	state_set_t current_states = std::move(delta.do_epsilon_closure(start_states));
 
-// 	transformer delta;
-// 	final_state_set_t final_states;
+	// 	for(const auto c: target) {
+	// 		// move to the next state set
+	// 		auto new_states = delta(current_states, c);
+	// 		// do ε-closure
+	// 		delta.do_epsilon_closure(current_states);
 
-	// non_determinstic_automaton() {
-	// 	new_state();	
+	// 		if(new_states.empty()) return false; // this nfa does not accept target string
+	// 		current_states = std::move(new_states);
+	// 	}
+	// 	// check if (current_states ∪ F) != Φ
+	// 	for(auto q: current_states) {
+	// 		if(final_states.count(q) != 0) return true; // target was accepted
+	// 	}
+	// 	return false; // target is unacceptable
+
 	// }
-
-	// void reset() {
-	// 	delta.m.clear();
-	// 	final_states.clear();
-	// 	max_state_index = 0;
-	// 	delta.m.emplace_back();
-	// }
-
-	// state_iterator_t new_state() {
-	// 	delta.m.emplace_back();
-	// 	return ++max_state_index;
-	// }
-	// state_iterator_t new_state(const vector<edge>& edges) {
-	// 	delta.m.emplace_back(edges);
-	// 	return ++max_state_index;
-	// }
-
-	// void mark_final_state(state_iterator_t index) {
-	// 	final_states.insert(index);
-	// }
-
-	// bool bind_transform(state_iterator_t index, state_iterator_t target_index, const edge& e) {
-	// 	if(index > max_state_index or target_index > max_state_index) return false;
-
-	// 	delta.m[index].push_back(e.set_target(target_index)); // reset target
-	// 	return true;
-	// }
-	// bool bind_transform(state_iterator_t index, const edge& e) {
-	// 	if(index > max_state_index) return false;
-
-	// 	delta.m[index].push_back(e);
-	// 	return true;
-	// }
-	// bool bind_empty_transform(state_iterator_t index, state_iterator_t target_index) {
-	// 	if(index > max_state_index or target_index > max_state_index) return false;
-	// 	delta.m[index].emplace_back(target_index);
-	// 	return true;
-	// }
-
-
-	// only check if the target is acceptable, but not capture anything 
-	bool test(string_view_t target, state_set_t start_states = {0}) const{
-		if(start_states.empty()) return false;
-
-		state_set_t current_states = std::move(delta.do_epsilon_closure(start_states));
-
-		for(const auto c: target) {
-			// move to the next state set
-			auto new_states = delta(current_states, c);
-			// do ε-closure
-			delta.do_epsilon_closure(current_states);
-
-			if(new_states.empty()) return false; // this nfa does not accept target string
-			current_states = std::move(new_states);
-		}
-		// check if (current_states ∪ F) != Φ
-		for(auto q: current_states) {
-			if(final_states.count(q) != 0) return true; // target was accepted
-		}
-		return false; // target is unacceptable
-
-	}
 
 	// // try to match the whole target and capture sub strings
 	// result_t match(string_view_t target) const{
 
 	// 	// init capture contexts
-	// 	capture_contexts contexts;
+	// 	state_context contexts;
 
 	// 	state_set_t current_states = {0};
 
@@ -1729,7 +1618,7 @@ struct non_determinstic_finite_automaton {
 
 	// result_t search(string_view_t target) const{
 
-	// 	capture_contexts contexts;
+	// 	state_context contexts;
 
 	// 	state_set_t current_states;
 
@@ -1772,67 +1661,41 @@ struct non_determinstic_finite_automaton {
 	// }
 
 	// // single step match
-	// state_set_t step(const char_t* pos, state_set_t start_states, capture_contexts& contexts) const{
+	// state_set_t step(const char_t* pos, state_set_t start_states, state_context& contexts) const{
 	// 	return delta(delta.do_epsilon_closure(start_states), pos, contexts);
 	// }
 
 
-}; // struct non_determinstic_automaton
-
 template <typename CharT>
-using NFA = non_determinstic_automaton<CharT>;
+using NFA = non_determinstic_finite_automaton<CharT>;
 
+// rewrite to some free functions?
 template <typename CharT>
 struct regular_expression {
 	using char_t = CharT;
-	using string_t = basic_string<char_t>;
+	// using string_t = basic_string<char_t>;
 	using string_view_t = basic_string_view<char_t>;
 
 	// store the pattern capture result
 	// using capture_t = vector<string_view_t>; 
 	
-	using complexity_t = size_t;
+	// using complexity_t = size_t;
 
 	using nfa_builder_t = nfa_builder<char_t>;
-
-	// using edge = typename nfa_t::edge;
-	// using state_iterator_t = typename nfa_t::state_iterator_t;
-
-	/*	sub expression(e) complexity(ψ) algorithm:
-		e = 
-			R or [] or [R] or [^] or [^R]   (R is a single range/edge)
-			             : ψ(e) = 1
-			[R1R2...Rn]  : ψ(e) = n + 1               (n > 1)
-			[^R1R2...Rn] : ψ(e) = n + 2               (n > 1)
-			e1 | e2      : ψ(e) = ψ(e1) + ψ(e2) + 3
-			e1 e2        : ψ(e) = ψ(e1) + ψ(e2)
-			e1*          : ψ(e) = ψ(e1) + 1
-			e1+          : ψ(e) = 2ψ(e1)
-			e1?          : ψ(e) = ψ(e1) + 2
-			e1{m}        : ψ(e) = mψ(e1)              (if ψ(e) <= max_unroll_complexity)
-			e1{m,}       : ψ(e) = (m + 1)ψ(e1)        (if ψ(e) <= max_unroll_complexity)
-			e1{m,n}      : ψ(e) = nψ(e1) + (n - m)    (if ψ(e) <= max_unroll_complexity)
-
-		if ψ(e) <= max_unroll_complexity: 
-			using trivial unroll algorithm: 
-				e{m}   -> e...e for m times e;
-				e{m,}  -> e...e+ for m times e;
-				e{m,n} -> e...e(e?...e?) for m times e and n - m times (e?)
-		else: 
-			using loop algorithm for the sub expression. 
-	*/
-
-	//parsing output: NFA M = (Q, Σ, δ, q0, F) 
+	using nfa_t = NFA<char_t>;
 	
+	// parsing output: NFA M = (Q, Σ, δ, q0, f) 
+	
+	nfa_t nfa;
 
-	regular_expression(string_view_t pattern) {
-		parse(pattern);
-	}
+	regular_expression(string_view_t pattern): nfa{parse(pattern)} {}
+
 	regular_expression() noexcept = default;
 
-	auto parse(string_view_t pattern) {
-		nfa_builder_t builder();
+	nfa_t parse(string_view_t pattern) {
+		nfa_builder_t builder;
 		builder.parse(pattern);
+		return builder.generate();
 	}
 
 	
