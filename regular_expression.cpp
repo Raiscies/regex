@@ -1412,6 +1412,7 @@ struct regular_expression_engine {
 	using string_iterator_t = string_view_t::const_iterator;
 	using nfa_t = non_determinstic_finite_automaton<char_t>;
 
+	using state_id_t = nfa_t::state_id_t;
 	using group_id_t = size_t;
 	using capture_result_t = vector<string_view_t>;
 
@@ -1714,7 +1715,7 @@ int main(int argc, const char** argv) {
 			if(target == "~") break;
 			auto result = re.match(target);
 			print("target = {}, capture: {}\n", target, result);
-			
+
 		}
 		
 	}
