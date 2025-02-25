@@ -15,7 +15,6 @@
 
 */
 
-#include <map>
 #include <set>
 #include <list>
 #include <stack>
@@ -30,6 +29,7 @@
 #include <iterator>
 #include <optional>
 #include <iostream>
+#include <algorithm>
 #include <functional>
 #include <string_view>
 #include <type_traits>
@@ -43,7 +43,6 @@ namespace rais {
 namespace regex {
 
 using std::cin;
-using std::map;
 using std::set;
 using std::get;
 using std::list;
@@ -66,13 +65,14 @@ using std::numeric_limits;
 using std::underlying_type_t;
 using std::reference_wrapper;
 using std::basic_string_view;
+using std::unordered_multimap;
 
 template <typename CharT>
 struct char_range {
 	using char_t = CharT;
 	char_t from, to;
 
-	constexpr is_member(char_t c) const noexcept{
+	constexpr bool is_member(char_t c) const noexcept{
 		return from <= c && c <= to;
 	}
 };
@@ -160,7 +160,7 @@ class nfa_builder {
 	using char_t = CharT;
 	using range_t = char_range<char_t>;
 	using string_view_t = basic_string_view<char_t>;
-	using string_iterator_t_t = typename string_view_t::const_iterator;
+	using string_iterator_t = typename string_view_t::const_iterator;
 
 	using nfa_t = non_determinstic_finite_automaton<char_t>;
 
@@ -190,7 +190,7 @@ class nfa_builder {
 		bool is_conjunction = false;
 
 		// this will be assigned after parsing
-		state_id_t state_id;
+		state_id_t state_id_t;
 		
 		constexpr state() noexcept = default;
 		constexpr state(bool is_conjunction) noexcept: 
@@ -314,7 +314,7 @@ class nfa_builder {
 			
 			nfa_t::edge res{
 				category, 
-				target->state_id
+				target->state_id_t
 			}
 			switch(category) {
 				case edge_category::single_char: 
@@ -328,7 +328,7 @@ class nfa_builder {
 				case edge_category::epsilon: 
 					res.data.capture = {
 						data.capture.id, 
-						data.capture.end->state_id
+						data.capture.end->state_id_t
 					};
 					return res;
 				default:
@@ -420,8 +420,8 @@ protected:
 	
 	// we don't directly use stack cause sometimes we need to assess the 2th top element of the stack,
 	// but don't want to pop the top, access it and push it back. 
-	struct nfa_stack_t: public std::stack<subnfa, vector<subnfa>> {
-		using stack_t = std::stack<subnfa, vector<subnfa>>;
+	struct nfa_stack_t: public stack<subnfa, vector<subnfa>> {
+		using stack_t = stack<subnfa, vector<subnfa>>;
 
 		// it is UB if size() < 2
 		constexpr stack_t::const_reference second_top() const{
@@ -457,7 +457,7 @@ public:
 		return --states.end();
 	}
 	template <typename... Args>
-	state_iterator_t insert_new_state(state_terator_t it, Args&&... args) {
+	state_iterator_t insert_new_state(state_iterator_t it, Args&&... args) {
 		return states.insert(it, {args...});
 	}
 
@@ -556,7 +556,7 @@ public:
 
 				break;
 			}
-			// left parentess (, ψ( (e) ) = ψ(e) + 1
+			// left parentess (, ψ( (e) ) = ψ(e) + 2
 			case oper::lparen: {
 				if(nfa_stack.size() < 2) return false; 
 				auto [begin_edge, end_state, complexity] = nfa_stack.top();
@@ -564,11 +564,14 @@ public:
 
 				auto& [capture_begin_edge, dummy_state, cap_complexity] = nfa_stack.top();
 				dummy_state->add_outgoing(begin_edge);
-				capture_begin_edge.set_capture_end(end_state);
-				cap_complexity += complexity;
+				auto capture_end_state = new_state();
+				capture_begin_edge.set_capture_end(capture_end_state);
+				end_state->add_outgoing(edge::make_epsilon(capture_end_state));
+
+				dummy_state = capture_end_state;
+				cap_complexity += complexity + 1;
 				break;
 			}
-
 			default: {
 				return false;
 			}
@@ -809,7 +812,7 @@ public:
 
 		// assign states' id
 		state_id_t id = 0;
-		for(auto& s: states) s->state_id = id++;
+		for(auto& s: states) s->state_id_t = id++;
 
 		nfa_stack.clear();
 		return {build_result = success, s.end()};
@@ -973,6 +976,7 @@ public:
 		return nfa_stack.has_second_top() ? std::next(nfa_stack.second_top().end_state) : states.front();
 	}
 
+	// TODO: in the consideration of optimization, let it can create more than one copy, which allow us reuse memo. 
 	// deep copy the stack top sub-nfa before itself
 	subnfa copy_before_top_subnfa(bool remove_capture = true) {
 		// deep copy a sub-nfa before the source nfa, and promise states' relative order is not changed,
@@ -984,12 +988,11 @@ public:
 		// const auto [begin_edge, end_state, complexity] = nfa;
 		
 		const auto [begin_edge, end_state, complexity] = nfa_stack.top();
-		const auto begin_state = top_begin_state()
-		map<const state_iterator_t, state_iterator_t> memo;
+		const auto begin_state = top_begin_state();
+		unordered_map<const state_iterator_t, state_iterator_t> memo;
 
 		for(auto it = begin_state; it != end_state; ++it) {
-			// memo[it] = new_state(it->is_conjunction);
-			memo[it] = insert_new_state(begin_state, it->is_conjunction)
+			memo[it] = insert_new_state(begin_state, it->is_conjunction);
 		}
 		auto copy_begin_edge = edge{begin_edge, memo[begin_edge.target]};
 
@@ -1228,7 +1231,7 @@ public:
 			++it;
 			++nfa_it;
 		}
-		nfa.final_state = final_state->state_id;
+		nfa.final_state = final_state->state_id_t;
 		nfa.max_capture_id = max_capture_id;
 		return nfa;
 	}
@@ -1257,10 +1260,7 @@ struct non_determinstic_finite_automaton {
 
 	// NFA M = (Q, Σ, δ, q0, f) 
 	using char_t = CharT; // Σ
-	// using string_view_t = basic_string_view<char_t>;
 	using range_t = char_range<char_t>;
-
-	// using result_t = vector<string_view_t>;
 
 	using nfa_builder_t = nfa_builder<char_t>;
 
@@ -1273,7 +1273,7 @@ struct non_determinstic_finite_automaton {
 		struct capture_info {
 			size_t id = 0;
 			state_id_t end;
-		}
+		};
 
 		union edge_data {
 			char_t single_char;
@@ -1283,7 +1283,7 @@ struct non_determinstic_finite_automaton {
 
 
 		bool accept(char_t c) const noexcept{
-			switch(this->category) {
+			switch(category) {
 			case edge_category::epsilon: 
 				return false; 
 			case edge_category::single_char: // range of one char [from]
@@ -1328,7 +1328,7 @@ struct non_determinstic_finite_automaton {
 
 		}
 		bool accept_epsilon() const noexcept{
-			switch(this->category) {
+			switch(category) {
 				case edge_category::epsilon:
 				// case edge_category::greedy_capture_begin:
 				// case edge_category::nongreedy_capture_begin:
@@ -1338,24 +1338,28 @@ struct non_determinstic_finite_automaton {
 			} 	
 		}
 
+		bool is_epsilon() const noexcept {
+			return category == edge_category::epsilon;
+		}
+
 		bool is_single_char() const noexcept{
-			return this->category == edge_category::single_char;
+			return category == edge_category::single_char;
 		}
 
 		bool is_range() const noexcept{
-			return this->category == edge_category::range;
+			return category == edge_category::range;
 		}
 
 		bool is_capture_begin() const noexcept{
-			return this->category == edge_category::epsilon && this->data.capture.id != 0;
+			return category == edge_category::epsilon && data.capture.id != 0;
 		}
 
 		edge_category get_category() const noexcept{
-			return this->category;
+			return category;
 		}
 
-		nfa_builder_t::edge::capture_info get_capture() const noexcept{
-			return this->data.capture;
+		capture_info get_capture() const noexcept{
+			return data.capture;
 		}
 
 
@@ -1365,6 +1369,13 @@ struct non_determinstic_finite_automaton {
 		
 		vector<edge> edges;
 		bool is_conjunction = false;
+
+		edge& operator[](size_t i) {
+			return edges[i];
+		}
+		const edge& operator[](size_t i) const{
+			return edges[i];
+		}
 		
 	};
 
@@ -1373,6 +1384,14 @@ struct non_determinstic_finite_automaton {
 	size_t max_capture_id = 0;
 
 	friend class nfa_builder_t;
+
+	state& operator[](state_id_t id) {
+		return states[id];
+	}
+
+	const state& operator[](state_id_t id) const{
+		return states[id];
+	}
 
 protected:
 	
@@ -1387,283 +1406,200 @@ struct regular_expression_engine {
 
 	using char_t = char;
 	using string_view_t = basic_string_view<char_t>;
+	using string_iterator_t = string_view_t::const_iterator;
 	using nfa_t = non_determinstic_finite_automaton<char_t>;
+
+	using group_id_t = size_t;
+	using capture_result_t = vector<string_view_t>;
+
 
 	// stores the contexts of captures in running nfa
 	// use during runtime
 	struct state_context {
 
 		struct capture {
-			using iterator_t = string_view_t::const_iterator;
 
-			iterator_t begin, end;
+			string_iterator_t begin, end;
 
-			bool completed = false;
+			// bool completed = false;
 
-			constexpr capture(iterator_t begin = {}) noexcept: begin{begin}, end{std::next(begin)} {}
-
-			capture& advance(size_t count = 1) noexcept{
-				assert(begin != iterator_t{});
-
-				std::advance(end, count);
-				return *this;
-			}
+			constexpr capture() noexcept = default;
+			constexpr capture(string_iterator_t begin) noexcept: begin{begin}, end{begin} {}
 			
-			capture& reset_capture(iterator_t new_begin = {}) noexcept{
-				begin = new_begin;
-				end = new_begin;
-				completed = false;
+			capture& reset(string_iterator_t new_begin) noexcept{
+				begin = end = new_begin;
 				return *this;
 			}
-		};
 
-		vector<capture> captures;
+			capture& complete(string_iterator_t pos) noexcept{
+				end = std::next(pos);
+				return *this;
+			}
+
+			bool try_complete(string_iterator_t pos) noexcept{
+				if(end == begin) {
+					 this->end = std::next(pos);
+					 return true;
+				}
+				return false;
+			}
+
+			bool completed() const noexcept{
+				return begin != end;
+			}
+
+		}; // struct capture
+
+		
+		// group_id -> captures
+		unordered_map<group_id_t, capture> captures;
+		bool active = false;
 
 		state_context() = default;
 
+		state_context& reset() {
+			captures.clear();
+			active = false;
+			return *this;
+		}
+
+		capture& operator[](group_id_t group_id) {
+			return captures[group_id];
+		}
+		const capture& operator[](group_id_t group_id) const{
+			return captures[group_id];
+		}
+
 	}; // struct state_context
+
 	
 	const nfa_t& nfa;
 
-	vector<state_context> contexts;
+protected:
+	vector<state_context> state_contexts;
+	unordered_multimap<state_id_t, group_id_t> capture_end_states;
 
-	regular_expression_engine(const nfa_t& nfa) noexcept: nfa{nfa}, contexts(nfa.states.size()) {}
+public:
 
-	
+	regular_expression_engine(const nfa_t& nfa): nfa{nfa}, contexts(nfa.states.size()) {
+		assert(!nfa.states.empty());
+	}
+
+	regular_expression_engine& reset() {
+		for(auto& s: state_contexts) s.reset();
+		state_contexts.front().active = true;
+		capture_results.clear();
+		return *this;
+	}
+
+	// spread src's state_context to its target state by edges[edge_id]
+	// it should support all kinds of edges, including ε edge
+	void spread_context(state_context& src_context, const nfa_t::edge& e, const string_iterator_t& pos) {
+
+		auto dist = e.target;
+		auto& dist_context = state_contexts[dist];
+
+		dist_context.active = true;
+		if(e.is_epsilon()) {
+			if(e.data.capture.id != 0) {
+				// is capture begin
+				for(auto [group_id, capture]: src_context.captures) {
+					if(e.get_capture().id == group_id) 
+						dist_context[group_id].reset(pos);
+					else
+						dist_context[group_id] = src_context[group_id];
+				}
+
+				// register the end state of this capture
+				// TODO: should we dynamicly do it?
+				// or build the map during nfa building time?
+				capture_end_states.insert({dist, e.get_capture().id});
+			}else {
+				dist_context.captures = src_context.captures;
+			}
+		}else {
+			// is a normal edge
+			dist_context.captures = src_context.captures;
+		}
+
+		// complete all of the captures
+		for(auto [it, end] = capture_end_states.equal_range(dist); it != end; ++it) { 
+			// it->second: group id of being completed capture
+			dist_context[it->second].try_complete(pos);
+		}
+	}
+
+
+	void do_epsilon_closure(state_id_t state, const string_iterator_t& pos) {
+		// apply ε-closure to state_contexts
+		// all of the ε-closure(q) always maintains the same context? 
+		// ε-closure(q) = {q} ∪ {p | p ∈ δ(q, ε) ∪ δ(δ(q, ε), ε) ∪ ...}	
+
+		queue<state_id_t> que;
+		que.push(state);
+
+		unordered_map<state_id_t, bool> visited;
+
+		while(!que.empty()) {
+			auto current_state = que.front();
+			que.pop();
+
+			if(auto [it, inserted] = visited.try_emplace(current_state, true); inserted) {
+				for(const auto& e: nfa.edges[current_state].edges) {
+					if(e.accept_epsilon() && visited.count(e.target) == 0) {
+						que.push(e.target);
+						// spread the state context
+						spread_context(state_contexts[current_state], e, pos);
+					}
+				}
+			}
+		}
+	}
+
+	bool step(string_iterator_t pos) {
+		// we must reversely iterate runtime states
+		bool trapped = true;
+		auto it = nfa.states.rbegin();
+		auto context_it = state_contexts.rbegin();
+		for(; it != nfa.states.rend(); ++it, ++context_it) if(context_it->active) {
+			
+			// for each state in state_contexts
+			// reset the current state
+			context_it->active = false;
+			for(const auto& e: it->edges) if(e.accept(*pos)) {
+				spread_context(*context_it, e, pos);
+				trapped = false;
+			}
+			
+			do_epsilon_closure(it, pos);
+		}
+		return !trapped;
+	}
+
+	tuple<capture_result_t, string_iterator_t> match(string_view_t s) {
+		reset();
+		
+		for(auto it: s) {
+			if(!step(it++)) {
+				// failed: can't match
+				return {{}, it}; 
+			}
+		}
+		// failed: can't match
+		if(!state_contexts[nfa.final_state].active) return {{}, s.end()};
+
+		capture_result_t result(nfa.max_capture_id + 1);
+		// result[0] is the whole match
+		result.front() = s;
+		for(auto [group_id, capture]: state_contexts[nfa.final_state].captures) {
+			if(capture.completed()) {
+				result[group_id] = {capture.begin, capture.end};
+			}
+		}
+		return {result, s.end()};
+	}
 
 }; // struct regular_expression_engine
-
-
-	// δ: Q * (Σ ∪ {ε}) -> 2^Q
-// 	struct transformer {
-
-// 		// accept (state-space(q), {character-space(c)}) -> {state-space(q)}
-// 		vector<vector<edge>> m;
-
-// 		// capture_context context;
-
-// 		// do_epsilon_closure, without state_context
-// 		state_set_t& do_epsilon_closure(state_set_t& current_states) const{
-// 			// do ε-closure(current_states) and assign to itself
-// 			state_set_t current_appended_states = current_states, 
-// 			               next_appended_states;
-// 			while(true) {
-// 				for(state_iterator_t q: current_appended_states) {
-// 					for(const edge& e: m[q]) {
-// 						if(e.accept_epsilon() && current_states.count(e.target) == 0) {
-// 							// e links to a new state that does not in current_states set
-// 							next_appended_states.insert(e.target);
-
-// 						}
-// 					}
-// 				}
-// 				if(next_appended_states.empty()) return current_states;
-
-// 				current_states.insert(next_appended_states.begin(), next_appended_states.end());
-// 				current_appended_states = std::move(next_appended_states);
-// 				next_appended_states.clear();
-// 			}
-// 		}
-
-// 		state_set_t& do_epsilon_closure(state_set_t& current_states, const char_t* pos, state_context& contexts) const{
-// 			// do ε-closure(current_states) and assign to itself
-// 			state_set_t current_appended_states = current_states, 
-// 			               next_appended_states;
-// 			while(true) {
-// 				for(state_iterator_t q: current_appended_states) {
-// 					for(const edge& e: m[q]) {
-// 						if(e.accept_epsilon() && current_states.count(e.target) == 0) {
-// 							// e links to a new state that does not in current_states set
-// 							next_appended_states.insert(e.target);
-
-// 							// handle capture
-// 							if(e.is_capture_start()) {
-// 								contexts.reset_capture(e, pos);
-// 							}
-// 						}
-// 					}
-// 				}
-// 				if(next_appended_states.empty()) return current_states;
-
-// 				current_states.insert(next_appended_states.begin(), next_appended_states.end());
-// 				current_appended_states = std::move(next_appended_states);
-// 				next_appended_states.clear();
-// 			}
-// 		}
-
-// 		// without state_context
-// 		state_set_t operator()(const state_set_t& current_states, char_t c) const{
-// 			// assume ε-closure(current_states) == current_states
-
-// 			if(current_states.empty()) return {};
-// 			state_set_t new_states;
-
-// 			for(auto q: current_states) {
-// 				// for each protential current state
-// 				if(m[q].empty()) continue;
-// 				else if(auto first_edge = m[q][0]; first_edge.is_conjunction_range()) {
-// 					// this state and its edges are conjunction
-// 					// c is accepted only when all of the edges are accepted 
-// 					for(auto it = ++m[q].cbegin(); it != m[q].cend(); ++it)
-// 						if(!it->accept(c)) goto next_state;
-
-// 					// this conjunction range is accepted
-// 					new_states.insert(first_edge.target);
-
-// 					next_state:;
-// 				}else {
-// 					for(const edge& e: m[q]) {
-// 						// for each range
-// 						if(e.accept(c)) {
-// 							new_states.insert(e.target);
-// 						}
-// 					} 
-// 				}
-// 			}
-// 			return new_states;
-// 			// return do_epsilon_closure(new_states);
-// 		}
-
-		// state_set_t operator()(const state_set_t& current_states, const char_t* pos, state_context& contexts) const{
-		// 		// assume ε-closure(current_states) == current_states
-
-		// 	if(current_states.empty()) return {};
-		// 	state_set_t new_states;
-		// 	char_t c = *pos;
-
-		// 	for(auto q: current_states) {
-		// 		// for each protential current state
-		// 		if(m[q].empty()) continue;
-		// 		else if(auto first_edge = m[q][0]; first_edge.is_conjunction_range()) {
-		// 			// this state and its edges are conjunction
-		// 			// c is accepted only when all of the edges are accepted 
-		// 			for(auto it = ++m[q].cbegin(); it != m[q].cend(); ++it)
-		// 				if(!it->accept(c)) goto next_state;
-
-		// 			// this conjunction range is accepted
-		// 			new_states.insert(first_edge.target);
-		// 			contexts.try_complete_capture(first_edge.target, pos);
-
-		// 			next_state:;
-		// 		}else {
-		// 			for(const edge& e: m[q]) {
-		// 				// for each range
-		// 				if(e.accept(c)) {
-		// 					new_states.insert(e.target);
-
-		// 					// try to complete the state if it is a end state of a sub nfa,
-		// 					// or else do nothing.
-		// 					contexts.try_complete_capture(e.target, pos);
-		// 				}
-		// 			} 
-		// 		}
-		// 	}
-		// 	// does not do_epsilon_closure anymore
-		// 	return new_states;
-		// 	// return do_epsilon_closure(new_states, pos, contexts);
-		// }
-
-// 	}; // struct transformer
-
-	// // only check if the target is acceptable, but not capture anything 
-	// bool test(string_view_t target, state_set_t start_states = {0}) const{
-	// 	if(start_states.empty()) return false;
-
-	// 	state_set_t current_states = std::move(delta.do_epsilon_closure(start_states));
-
-	// 	for(const auto c: target) {
-	// 		// move to the next state set
-	// 		auto new_states = delta(current_states, c);
-	// 		// do ε-closure
-	// 		delta.do_epsilon_closure(current_states);
-
-	// 		if(new_states.empty()) return false; // this nfa does not accept target string
-	// 		current_states = std::move(new_states);
-	// 	}
-	// 	// check if (current_states ∪ F) != Φ
-	// 	for(auto q: current_states) {
-	// 		if(final_states.count(q) != 0) return true; // target was accepted
-	// 	}
-	// 	return false; // target is unacceptable
-
-	// }
-
-	// // try to match the whole target and capture sub strings
-	// result_t match(string_view_t target) const{
-
-	// 	// init capture contexts
-	// 	state_context contexts;
-
-	// 	state_set_t current_states = {0};
-
-	// 	auto pos = target.cbegin();
-	// 	delta.do_epsilon_closure(current_states, pos - 1, contexts);
-
-	// 	for(; pos != target.cend(); ++pos) {
-	// 		// move to the next state set
-	// 		auto new_states = delta(current_states, pos, contexts);
-	// 		// an then do ε-closure
-	// 		delta.do_epsilon_closure(new_states, pos, contexts);
-	// 		if(new_states.empty()) return {}; // nothing to match
-	// 		current_states = std::move(new_states);
-	// 	}
-
-	// 	for(auto q: current_states) {
-	// 		if(final_states.count(q) != 0) return contexts.get_result();
-	// 	}
-
-	// 	return {}; // target is unacceptable
-
-	// }
-
-	// result_t search(string_view_t target) const{
-
-	// 	state_context contexts;
-
-	// 	state_set_t current_states;
-
-	// 	// naive!
-	// 	for(auto s = target.cbegin(); s != target.cend();) {
-	// 		current_states.emplace(0);
-
-	// 		auto pos = s;
-
-	// 		delta.do_epsilon_closure(current_states, pos, contexts);
-
-	// 		for(; pos != target.cend(); ++pos) {
-	// 			auto new_states = delta(current_states, *pos);
-	// 			if(new_states.empty()) {
-	// 				// not return false, but let s move to the next char, 
-	// 				// and try to match again
-	// 				goto next_pass;
-	// 			}
-
-	// 			current_states = std::move(new_states);
-	// 		}
-	// 		// once the regex is matched, stop matching the tailing strings and return the result
-	// 		for(auto q: current_states) {
-	// 			if(final_states.count(q) != 0) return contexts.get_result();
-	// 		}
-
-	// 		next_pass:
-	// 		// reset all of state set and contexts
-	// 		contexts.reset_all_captures();
-	// 		current_states.clear();
-	// 		++s;
-	// 	}
-
-	// 	return {};
-	// }
-
-	// // single step test
-	// state_set_t step(char_t c, state_set_t start_states) const{
-	// 	return delta(delta.do_epsilon_closure(start_states), c);
-	// }
-
-	// // single step match
-	// state_set_t step(const char_t* pos, state_set_t start_states, state_context& contexts) const{
-	// 	return delta(delta.do_epsilon_closure(start_states), pos, contexts);
-	// }
 
 
 template <typename CharT>
