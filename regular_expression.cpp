@@ -1636,29 +1636,56 @@ public:
 }; // struct regular_expression_engine
 
 // rewrite to some free functions?
+// template <typename CharT>
+// struct regular_expression {
+// 	using char_t = CharT;
+// 	// using string_t = basic_string<char_t>;
+// 	using string_view_t = basic_string_view<char_t>;
+
+// 	using nfa_builder_t = nfa_builder<char_t>;
+	
+// 	nfa_t nfa;
+
+// 	regular_expression(string_view_t pattern): nfa{parse(pattern)} {}
+
+// 	regular_expression() noexcept = default;
+
+// 	nfa_t parse(string_view_t pattern) {
+// 		nfa_builder_t builder;
+// 		builder.parse(pattern);
+// 		return builder.generate();
+// 	}
+
+	
+
+// }; // struct regular_expression
+
+// free functions
 template <typename CharT>
-struct regular_expression {
-	using char_t = CharT;
-	// using string_t = basic_string<char_t>;
-	using string_view_t = basic_string_view<char_t>;
+typename regular_expression_engine<CharT>::capture_result_t match(basic_string_view<CharT> pattern, basic_string_view<CharT> target) {
+	return regular_expression_engine<CharT>{
+		nfa_builder<CharT>{pattern}.generate()
+	}.match(target);
+}
 
-	using nfa_builder_t = nfa_builder<char_t>;
-	
-	nfa_t nfa;
+template <typename CharT>
+typename regular_expression_engine<CharT>::capture_result_t search(basic_string_view<CharT> pattern, basic_string_view<CharT> target) {
+	return regular_expression_engine<CharT>{
+		nfa_builder<CharT>{pattern}.generate()
+	}.search(target);
+}
 
-	regular_expression(string_view_t pattern): nfa{parse(pattern)} {}
+template <typename CharT>
+vector<typename regular_expression_engine<CharT>::capture_result_t> search_all(basic_string_view<CharT> pattern, basic_string_view<CharT> target) {
+	return regular_expression_engine<CharT>{
+		nfa_builder<CharT>{pattern}.generate()
+	}.search_all(target);
+}
 
-	regular_expression() noexcept = default;
-
-	nfa_t parse(string_view_t pattern) {
-		nfa_builder_t builder;
-		builder.parse(pattern);
-		return builder.generate();
-	}
-
-	
-
-}; // struct regular_expression
+template <typename CharT>
+non_determinstic_finite_automaton<CharT> compile(basic_string_view<CharT> pattern) {
+	return nfa_builder<CharT>{pattern}.generate();
+}
 
 } // namespace regex
 
