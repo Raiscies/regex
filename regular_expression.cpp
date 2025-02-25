@@ -52,7 +52,7 @@ enum class error_category {
 	bad_bracket_expression,
 	bad_brace_expression,
 	expensive_brace_expression_unroll
-error_category::};
+};
 
 
 static constexpr std::string_view error_message(error_category category) noexcept{
@@ -65,7 +65,7 @@ static constexpr std::string_view error_message(error_category category) noexcep
 	case error_category::bad_bracket_expression: return "bad bracket expression";
 	case error_category::bad_brace_expression:   return "bad brace expression";
 	case error_category::expensive_brace_expression_unroll: return "brace expression is too complex to unroll";
-	error_category::}
+	}
 	return "";
 }
 
