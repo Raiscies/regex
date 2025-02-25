@@ -1576,17 +1576,17 @@ public:
 		return !trapped;
 	}
 
-	tuple<capture_result_t, string_iterator_t> match(string_iterator_t begin, string_iterator_t end){
+	capture_result_t match(string_iterator_t& it, string_iterator_t end){
 		reset();
 		
-		for(auto it = begin; it != end; ++it) {
-			if(!step(it)) {
+		while(it != end) {
+			if(!step(it++)) {
 				// failed: can't match
-				return {{}, it}; 
+				return {}; 
 			}
 		}
 		// failed: can't match
-		if(!state_contexts[nfa.final_state].active) return {{}, s.end()};
+		if(!state_contexts[nfa.final_state].active) return {};
 
 		capture_result_t result(nfa.max_capture_id + 1);
 		// result[0] is the whole match
@@ -1596,25 +1596,41 @@ public:
 				result[group_id] = {capture.begin, capture.end};
 			}
 		}
-		return {result, s.end()};
+		return result;
 	}
 
-	tuple<capture_result_t, string_iterator_t> match(string_view_t) {
-		return match(s.begin(), s.end());
+	capture_result_t match(string_view_t s) {
+		auto it = s.begin();
+		return match(it, s.end());
 	}
 
-
-	capture_result_t search(string_iterator_t begin, string_iterator_t end) {
-		auto it = begin;
+	capture_result_t search(string_iterator_t& it, string_iterator_t end) {
+		
 		while(it != end) {
-			auto [result, pos] = match(it, end);
+			auto current = it;
+			auto result = match(current, end);
 			if(!result.empty()) return result;
 			++it;
 		}
 		return {};
 	}
 	capture_result_t search(string_view_t s) {
-		return search(s.begin(), s.end());
+		auto it = s.begin();
+		return search(it, s.end());
+	}
+
+	vector<capture_result_t> search_all(string_iterator_t begin, string_iterator_t end) {
+		vector<capture_result_t> results;
+		auto it = begin;
+		while(it != end) {
+			auto result = search(it, end);
+			if(result.empty()) continue;
+			results.push_back(result);
+		}
+		return results;
+	}
+	vector<capture_result_t> search_all(string_view_t s) {
+		return search_all(s.begin(), s.end());
 	}
 
 }; // struct regular_expression_engine
