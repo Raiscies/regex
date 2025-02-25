@@ -1576,11 +1576,11 @@ public:
 		return !trapped;
 	}
 
-	tuple<capture_result_t, string_iterator_t> match(string_view_t s) {
+	tuple<capture_result_t, string_iterator_t> match(string_iterator_t begin, string_iterator_t end){
 		reset();
 		
-		for(auto it: s) {
-			if(!step(it++)) {
+		for(auto it = begin; it != end; ++it) {
+			if(!step(it)) {
 				// failed: can't match
 				return {{}, it}; 
 			}
@@ -1599,11 +1599,25 @@ public:
 		return {result, s.end()};
 	}
 
+	tuple<capture_result_t, string_iterator_t> match(string_view_t) {
+		return match(s.begin(), s.end());
+	}
+
+
+	capture_result_t search(string_iterator_t begin, string_iterator_t end) {
+		auto it = begin;
+		while(it != end) {
+			auto [result, pos] = match(it, end);
+			if(!result.empty()) return result;
+			++it;
+		}
+		return {};
+	}
+	capture_result_t search(string_view_t s) {
+		return search(s.begin(), s.end());
+	}
+
 }; // struct regular_expression_engine
-
-
-template <typename CharT>
-using NFA = non_determinstic_finite_automaton<CharT>;
 
 // rewrite to some free functions?
 template <typename CharT>
@@ -1612,15 +1626,7 @@ struct regular_expression {
 	// using string_t = basic_string<char_t>;
 	using string_view_t = basic_string_view<char_t>;
 
-	// store the pattern capture result
-	// using capture_t = vector<string_view_t>; 
-	
-	// using complexity_t = size_t;
-
 	using nfa_builder_t = nfa_builder<char_t>;
-	using nfa_t = NFA<char_t>;
-	
-	// parsing output: NFA M = (Q, Σ, δ, q0, f) 
 	
 	nfa_t nfa;
 
