@@ -41,12 +41,37 @@
 namespace rais {
 
 namespace regex {
+	
+enum class error_category {
+	success = 0,
+	ready, 
+	empty_pattern, 
+	empty_operand, 
+	bad_escape, 
+	missing_paren,
+	bad_bracket_expression,
+	bad_brace_expression,
+	expensive_brace_expression_unroll
+error_category::};
 
-using std::cin;
-using std::set;
-using std::get;
+
+static constexpr std::string_view error_message(error_category category) noexcept{
+	switch(category) {
+	case error_category::success:                return "successed";
+	case error_category::ready:                  return "ready to build";
+	case error_category::empty_operand:          return "empty operand";
+	case error_category::bad_escape:             return "bad escape";
+	case error_category::missing_paren:          return "missing parentheses";
+	case error_category::bad_bracket_expression: return "bad bracket expression";
+	case error_category::bad_brace_expression:   return "bad brace expression";
+	case error_category::expensive_brace_expression_unroll: return "brace expression is too complex to unroll";
+	error_category::}
+	return "";
+}
+
+namespace impl {
+
 using std::list;
-using std::pair;
 using std::swap;
 using std::move;
 using std::tuple;
@@ -63,7 +88,6 @@ using std::basic_string;
 using std::unordered_map;
 using std::numeric_limits;
 using std::underlying_type_t;
-using std::reference_wrapper;
 using std::basic_string_view;
 using std::unordered_multimap;
 
@@ -373,18 +397,6 @@ class nfa_builder {
 		}
 	}
 
-	enum error_category {
-		success = 0,
-		ready, 
-		empty_pattern, 
-		empty_operand, 
-		bad_escape, 
-		missing_paren,
-		bad_bracket_expression,
-		bad_brace_expression,
-		expensive_brace_expression_unroll
-	} build_result;
-
 
 	static constexpr oper to_oper(char_t c) noexcept{
 		switch(c) {
@@ -397,20 +409,6 @@ class nfa_builder {
 		case '.': return oper::wildcard;
 		default: return oper(-1);
 		}
-	}
-
-	static constexpr string_view error_message(error_category category) noexcept{
-		switch(category) {
-		case success:                return "successed";
-		case ready:                  return "ready to build";
-		case empty_operand:          return "empty operand";
-		case bad_escape:             return "bad escape";
-		case missing_paren:          return "missing parentheses";
-		case bad_bracket_expression: return "bad bracket expression";
-		case bad_brace_expression:   return "bad brace expression";
-		case expensive_brace_expression_unroll: return "brace expression is too complex to unroll";
-		}
-		return "";
 	}
 
 
@@ -440,14 +438,15 @@ protected:
 	} nfa_stack;
 
 	stack<oper>	oper_stack;
-
+	
+	error_category build_result;
 public:
 
 	void reset() {
 		states.clear();
 		final_state = nullptr;
 		capture_groups.clear();
-		build_result = ready;
+		build_result = error_category::ready;
 	}
 
 	template <typename... Args>
@@ -670,7 +669,7 @@ public:
 		
 		reset();
 		
-		if(s.empty()) return {build_result = empty_pattern, nullptr};
+		if(s.empty()) return {build_result = error_category::empty_pattern, nullptr};
 
 		bool has_potential_concat_oper = false;
 		
@@ -681,7 +680,7 @@ public:
 			case '?': // optional,         (r)? ::= (r)|ε
 
 				// *, +, ? have the highest priorities, so directly reduce it
-				if(!reduce(to_oper(*pos))) return {build_result = empty_operand, pos};
+				if(!reduce(to_oper(*pos))) return {build_result = error_category::empty_operand, pos};
 				++pos;
 				has_potential_concat_oper = true;
 				break;
@@ -689,7 +688,7 @@ public:
 			case '|':
 				// alternative / 'or' operator
 				while(!oper_stack.empty() && priority(oper_stack.top()) >= priority(oper::alter)) {
-					if(!reduce()) return {build_result = empty_operand, pos};
+					if(!reduce()) return {build_result = error_category::empty_operand, pos};
 					oper_stack.pop();
 				}
 				oper_stack.push(oper::alter);
@@ -698,7 +697,7 @@ public:
 				break;
 
 			case '(':
-				if(has_potential_concat_oper && !reduce_concat()) return {build_result = empty_operand, pos};
+				if(has_potential_concat_oper && !reduce_concat()) return {build_result = error_category::empty_operand, pos};
 				// make_capture_group();
 
 				++max_capture_id;
@@ -714,11 +713,11 @@ public:
 
 			case ')':
 				while(!oper_stack.empty() && oper_stack.top() != oper::lparen) {
-					if(!reduce()) return {build_result = empty_operand, pos};
+					if(!reduce()) return {build_result = error_category::empty_operand, pos};
 					oper_stack.pop();
 				}
 
-				if(oper_stack.empty()) return {build_result = missing_paren, pos}; // error: missing left paren '('
+				if(oper_stack.empty()) return {build_result = error_category::missing_paren, pos}; // error: missing left paren '('
 				else {
 					// the top must be lparen '(', reduce it to build a capture
 					reduce();
@@ -730,18 +729,18 @@ public:
 
 			case '[': {
 				// [c...] bracket expression
-				if(++pos == s.end()) return {build_result = bad_bracket_expression, pos};
+				if(++pos == s.end()) return {build_result = error_category::bad_bracket_expression, pos};
 				bool invert_range = false;
 				if(*pos == '^') {
 					invert_range = true;
 					++pos;
 				}
 				if(auto brackets_res = parse_brackets(pos, s.end()); brackets_res.has_value()) {
-					if(has_potential_concat_oper && !reduce_concat()) return {build_result = empty_operand, pos};
+					if(has_potential_concat_oper && !reduce_concat()) return {build_result = error_category::empty_operand, pos};
 
 					if(!invert_range) reduce_brackets(brackets_res.value());
 					else              reduce_brackets_invert(brackets_res.value()); 
-				}else return {build_result = bad_bracket_expression, pos};
+				}else return {build_result = error_category::bad_bracket_expression, pos};
 				
 				has_potential_concat_oper = true;
 				break;
@@ -751,9 +750,9 @@ public:
 				// {m}, {m,}, {m,n}  counted repetition expression
 				auto braces_res = parse_braces(++pos, s.end());
 				if(braces_res.kind == braces_result::error)
-					return {build_result = bad_brace_expression, pos};
+					return {build_result = error_category::bad_brace_expression, pos};
 				if(!reduce_braces(braces_res)) 
-					return {build_result = expensive_brace_expression_unroll, pos};
+					return {build_result = error_category::expensive_brace_expression_unroll, pos};
 				has_potential_concat_oper = true;
 				break;
 
@@ -766,7 +765,7 @@ public:
 					// escape
 					if(auto lex_res = lex_escape(++pos, s.end()); lex_res.has_value()) 
 						e = lex_res.value();
-					else return {build_result = bad_escape, pos};
+					else return {build_result = error_category::bad_escape, pos};
 					// pos has been moved at lex_escape(), so don't need to ++pos;
 					break;
 				case '.':
@@ -781,7 +780,7 @@ public:
 				
 				e.set_target(new_state());
 				if(has_potential_concat_oper && !reduce_concat()) {
-					return {build_result = empty_operand, pos};
+					return {build_result = error_category::empty_operand, pos};
 				}
 				// push char
 				nfa_stack.emplace(e, e.target, 1);
@@ -796,9 +795,9 @@ public:
 		while(!oper_stack.empty()) {
 			if(oper_stack.top() == oper::lparen) {
 				// missing right paren ')'
-				return {build_result = missing_paren, s.end()};
+				return {build_result = error_category::missing_paren, s.end()};
 			}else if(!reduce()) {
-				return {build_result = empty_operand, s.end()};			
+				return {build_result = error_category::empty_operand, s.end()};			
 			}
 			oper_stack.pop();
 		}
@@ -815,7 +814,7 @@ public:
 		for(auto& s: states) s->state_id_t = id++;
 
 		nfa_stack.clear();
-		return {build_result = success, s.end()};
+		return {build_result = error_category::success, s.end()};
 	}
 
 	bool reduce_concat() {
@@ -1216,9 +1215,13 @@ public:
 		return {kind, m, n};
 	}
 
+	error_category get_result() const noexcept {
+		return build_result;
+	}
+
 	// generate a nfa as our result
 	nfa_t generate() {
-		if(build_result != success) {
+		if(build_result != error_category::success) {
 			return {}; // return a empty nfa
 		}
 
@@ -1635,56 +1638,47 @@ public:
 
 }; // struct regular_expression_engine
 
-// rewrite to some free functions?
-// template <typename CharT>
-// struct regular_expression {
-// 	using char_t = CharT;
-// 	// using string_t = basic_string<char_t>;
-// 	using string_view_t = basic_string_view<char_t>;
+} // namespace impl
 
-// 	using nfa_builder_t = nfa_builder<char_t>;
-	
-// 	nfa_t nfa;
+template <typename CharT>
+using regular_expression_engine = impl::regular_expression_engine<CharT>;
 
-// 	regular_expression(string_view_t pattern): nfa{parse(pattern)} {}
-
-// 	regular_expression() noexcept = default;
-
-// 	nfa_t parse(string_view_t pattern) {
-// 		nfa_builder_t builder;
-// 		builder.parse(pattern);
-// 		return builder.generate();
-// 	}
-
-	
-
-// }; // struct regular_expression
 
 // free functions
 template <typename CharT>
-typename regular_expression_engine<CharT>::capture_result_t match(basic_string_view<CharT> pattern, basic_string_view<CharT> target) {
-	return regular_expression_engine<CharT>{
-		nfa_builder<CharT>{pattern}.generate()
-	}.match(target);
+std::tuple<error_category, typename regular_expression_engine<CharT>::capture_result_t> match(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
+	impl::nfa_builder<CharT> builder{pattern};
+	if(auto result = builder.get_result(); result != error_category::success) 
+		return {result, {}};
+	else return {result, regular_expression_engine<CharT>{
+		builder.generate()
+	}.match(target)};
 }
 
 template <typename CharT>
-typename regular_expression_engine<CharT>::capture_result_t search(basic_string_view<CharT> pattern, basic_string_view<CharT> target) {
-	return regular_expression_engine<CharT>{
-		nfa_builder<CharT>{pattern}.generate()
-	}.search(target);
+std::tuple<error_category, typename regular_expression_engine<CharT>::capture_result_t> search(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
+	impl::nfa_builder<CharT> builder{pattern};
+	if(auto result = builder.get_result(); result != error_category::success) 
+		return {result, {}};
+	else return {result, regular_expression_engine<CharT>{
+		builder.generate()
+	}.search(target)};
 }
 
 template <typename CharT>
-vector<typename regular_expression_engine<CharT>::capture_result_t> search_all(basic_string_view<CharT> pattern, basic_string_view<CharT> target) {
-	return regular_expression_engine<CharT>{
-		nfa_builder<CharT>{pattern}.generate()
-	}.search_all(target);
+std::tuple<error_category, std::vector<typename regular_expression_engine<CharT>::capture_result_t>> search_all(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
+	impl::nfa_builder<CharT> builder{pattern};
+	if(auto result = builder.get_result(); result != error_category::success) 
+		return {result, {}};
+	else return {result, regular_expression_engine<CharT>{
+		builder.generate()
+	}.search_all(target)};
 }
 
 template <typename CharT>
-non_determinstic_finite_automaton<CharT> compile(basic_string_view<CharT> pattern) {
-	return nfa_builder<CharT>{pattern}.generate();
+std::tuple<error_category, impl::non_determinstic_finite_automaton<CharT>> compile(std::basic_string_view<CharT> pattern) {
+	impl::nfa_builder<CharT> builder{pattern};
+	return {builder.get_result(), builder.generate()};
 }
 
 } // namespace regex
@@ -1692,7 +1686,8 @@ non_determinstic_finite_automaton<CharT> compile(basic_string_view<CharT> patter
 } // namespace rais
 
 int main(int argc, const char** argv) {
-	
+	using std::string;
+	using std::cin;
 	using namespace fmt;
 	using namespace rais::regex;
 
@@ -1706,23 +1701,21 @@ int main(int argc, const char** argv) {
 
 		print("pattern: {}\n", pattern);
 
-		// regular_expression<char> re;
-		
-		// auto [parse_result, pos] = re.parse(pattern);
-		
-		// print("pattern result: {}\n", re.error_message(parse_result));
-		
-		// if(parse_result != regular_expression<char>::error_category::success) continue;
+		auto [result, nfa] = compile<char>(pattern);
 
-		// while(true) {
-		// 	string target;
-		// 	print("input a target string:\n");
-		// 	cin >> target;
-		// 	if(target == "~") break;
-		// 	bool passed_test = re.nfa.test(target);
-		// 	auto result = re.nfa.match(target);
-		// 	print("target = {}, test result = {}, capture: {}\n", target, passed_test, result);
-		// }
+		print("pattern result: {}\n", error_message(result));
+		
+		if(result != error_category::success) continue;
+		regular_expression_engine<char> re{nfa};
+		while(true) {
+			string target;
+			print("input a target string:\n");
+			cin >> target;
+			if(target == "~") break;
+			auto result = re.match(target);
+			print("target = {}, capture: {}\n", target, result);
+			
+		}
 		
 	}
 
