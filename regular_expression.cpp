@@ -107,6 +107,12 @@ constexpr bool in_range(CharT a, CharT b, CharT x) noexcept{ return a <= x && x 
 template <typename CharT>
 constexpr bool in_range(const char_range<CharT>& r, CharT x) noexcept { return r.is_member(x); }
 
+// so dirty
+template <typename CharT>
+constexpr basic_string_view<CharT> make_string_view(const CharT* begin, const CharT* end) noexcept{
+	return {&*begin, static_cast<size_t>(end - begin)};
+}
+
 
 enum class oper {
 	// enum value represents the priority of the operators
@@ -152,7 +158,7 @@ template <typename CharT>
 struct non_determinstic_finite_automaton;
 
 template <typename CharT> 
-class nfa_builder {
+struct nfa_builder {
 	// a non-determinstic-finite-automaton factory
 	// NFA M = (Q, Σ, δ, q0, f) 
 	
@@ -203,6 +209,10 @@ class nfa_builder {
 
 	
 	constexpr nfa_builder() {}
+
+	nfa_builder(string_view_t s) {
+		parse(s);
+	}
 	
 	struct edge;
 	
@@ -214,7 +224,7 @@ class nfa_builder {
 		bool is_conjunction = false;
 
 		// this will be assigned after parsing
-		state_id_t state_id_t;
+		state_id_t id;
 		
 		constexpr state() noexcept = default;
 		constexpr state(bool is_conjunction) noexcept: 
@@ -230,10 +240,10 @@ class nfa_builder {
 			return this;
 		}
 
-		nfa_t::state generate() const{
-			nfa_t::state s;
+		typename nfa_t::state generate() const{
+			typename nfa_t::state s;
 			for(const auto& e: edges) {
-				s.states.push_back(e.generate());
+				s.edges.push_back(e.generate());
 			}
 			// do weed need this?
 			s.is_conjunction = is_conjunction;
@@ -245,8 +255,16 @@ class nfa_builder {
 	list<state> states;
 	
 	using state_iterator_t = typename list<state>::iterator;
-	using state_const_iterator_t = typename list<state>::const_iterator;
-	
+	using const_state_iterator_t = typename list<state>::const_iterator;
+
+	// we must implement a hash function for state_iterator_t
+	struct state_iterator_hash {
+		// this function requires it is dereferenceable	
+		constexpr size_t operator()(const state_iterator_t& it) const noexcept{
+			return std::hash<const state*>()(&*it);
+		}
+	};
+
 	state_iterator_t final_state;
 	// vector<state_iterator_t> capture_groups; // capture groups' end state
 	size_t max_capture_id = 0;
@@ -268,15 +286,20 @@ class nfa_builder {
 			range_t range;
 			// active when category == epsilon
 			capture_info capture;
+
+			constexpr edge_data(): capture{} {}
+			constexpr edge_data(char_t c): single_char{c} {}
+			constexpr edge_data(range_t r): range{r} {}
+			constexpr edge_data(capture_info cap): capture{cap} {}
 		} data; 
 
-		constexpr edge(edge_category category, char_t single_char, state_iterator_t target = {}): 
+		constexpr edge(edge_category category, char_t single_char, state_iterator_t target = {}) noexcept: 
 			category{category}, target{target}, data{single_char} {}
 
-		constexpr edge(edge_category category, range_t range, state_iterator_t target = {}): 
+		constexpr edge(edge_category category, range_t range, state_iterator_t target = {}) noexcept: 
 			category{category}, target{target}, data{range} {}
 
-		constexpr edge(edge_category category, state_iterator_t target = {}): 
+		constexpr edge(edge_category category, state_iterator_t target = {}) noexcept: 
 			category{category}, target{target} {}
 
 	private:
@@ -292,7 +315,7 @@ class nfa_builder {
 			category{other.category}, target{target}, data{other.data} {}
 
 		static constexpr edge make_epsilon(state_iterator_t target = {}) noexcept{
-			return {edge_category::epsilon, target};
+			return {edge_category::epsilon, capture_info{}, target};
 		}
 
 		static constexpr edge make_single_char(char_t c, state_iterator_t target = {}) noexcept{
@@ -334,12 +357,12 @@ class nfa_builder {
 			return *this;
 		}
 
-		nfa_t::edge generate() const{
+		typename nfa_t::edge generate() const{
 			
-			nfa_t::edge res{
+			typename nfa_t::edge res{
 				category, 
-				target->state_id_t
-			}
+				target->id
+			};
 			switch(category) {
 				case edge_category::single_char: 
 				case edge_category::invert_single_char:
@@ -350,9 +373,9 @@ class nfa_builder {
 					res.data.range = data.range;
 					return res;
 				case edge_category::epsilon: 
-					res.data.capture = {
+					res.data.capture = typename nfa_t::capture_info {
 						data.capture.id, 
-						data.capture.end->state_id_t
+						data.capture.id == 0 ? 0 : data.capture.end->id
 					};
 					return res;
 				default:
@@ -377,6 +400,10 @@ class nfa_builder {
 		// 	begin_edge{begin_edge}, begin_state{begin_state}, end_state{end_state}, complexity{complexity} {}
 
 		constexpr subnfa(const subnfa&) noexcept = default;
+		constexpr subnfa(edge begin_edge, state_iterator_t end_state) noexcept: 
+			begin_edge{begin_edge}, end_state{end_state} {}
+		constexpr subnfa(edge begin_edge, state_iterator_t end_state, complexity_t complexity) noexcept: 
+			begin_edge{begin_edge}, end_state{end_state}, complexity{complexity} {}
 
 
 	};
@@ -422,17 +449,17 @@ protected:
 		using stack_t = stack<subnfa, vector<subnfa>>;
 
 		// it is UB if size() < 2
-		constexpr stack_t::const_reference second_top() const{
+		constexpr typename stack_t::const_reference second_top() const{
 			// return this->C[size() - 2]; 
-			return *++this->C.crbegin() // slightly released inner container constrain
+			return *++this->c.crbegin(); // slightly released inner container constrain
 		}
-		constexpr stack_t::reference second_top() {
+		constexpr typename stack_t::reference second_top() {
 			// return this->C[size() - 2];
-			return *++this->C.rbegin()
+			return *++this->c.rbegin();
 		}
 
 		constexpr bool has_second_top() const noexcept{
-			return size() >= 2;
+			return this->size() >= 2;
 		}
 
 	} nfa_stack;
@@ -444,9 +471,14 @@ public:
 
 	void reset() {
 		states.clear();
-		final_state = nullptr;
-		capture_groups.clear();
+		final_state = {};
+		// capture_groups.clear();
 		build_result = error_category::ready;
+	}
+	
+	state_iterator_t top_begin_state() {
+		assert(!nfa_stack.empty() && !states.empty());
+		return nfa_stack.has_second_top() ? std::next(nfa_stack.second_top().end_state) : states.begin();
 	}
 
 	template <typename... Args>
@@ -457,7 +489,7 @@ public:
 	}
 	template <typename... Args>
 	state_iterator_t insert_new_state(state_iterator_t it, Args&&... args) {
-		return states.insert(it, {args...});
+		return states.insert(it, state{args...});
 	}
 
 	// reduce current sub-nfa and then push to stack, 
@@ -575,6 +607,7 @@ public:
 				return false;
 			}
 		}
+		return true;
 	}
 
 	optional<edge> lex_escape(string_iterator_t& pos, const string_iterator_t& end) {
@@ -614,19 +647,20 @@ public:
 	
 		*/
 		// assume pos != end
-		switch(*pos++) {
+		char_t c = *pos++;
+		switch(c) {
 		// control escapes:
-		case 'f': return { edge_category::single_char, '\f' };
-		case 'n': return { edge_category::single_char, '\n' };
-		case 'r': return { edge_category::single_char, '\r' };
-		case 't': return { edge_category::single_char, '\t' };
-		case 'v': return { edge_category::single_char, '\v' };
-		case '0': return { edge_category::single_char, '\0' };
-		case 'b': return { edge_category::single_char, '\b' }; // backspace // TODO: this works only when in bracket expression, in other situation, this is a block identify character
+		case 'f': return { {edge_category::single_char, char_t('\f')} };
+		case 'n': return { {edge_category::single_char, char_t('\n')} };
+		case 'r': return { {edge_category::single_char, char_t('\r')} };
+		case 't': return { {edge_category::single_char, char_t('\t')} };
+		case 'v': return { {edge_category::single_char, char_t('\v')} };
+		case '0': return { {edge_category::single_char, char_t('\0')} };
+		case 'b': return { {edge_category::single_char, char_t('\b')} }; // backspace // TODO: this works only when in bracket expression, in other situation, this is a block identify character
 
 		case 'c': {
 			if(pos != end) {
-				return { edge_category::single_char, char_t(*pos++ % 32) };
+				return { {edge_category::single_char, char_t(*pos++ % 32)} };
 			}else {
 				// bad escape
 				return { std::nullopt };
@@ -636,10 +670,10 @@ public:
 			if(pos != end) {
 				auto val = hex_val(*pos++);
 				if((pos + 1) != end) {
-					return { edge_category::single_char, char_t(val * 0x10 + hex_val(*pos++)) };
+					return { {edge_category::single_char, char_t(val * 0x10 + hex_val(*pos++))} };
 				}else {
 					// actually it's a bad escape
-					return { edge_category::single_char,  char_t(val) };
+					return { {edge_category::single_char,  char_t(val)} };
 				}
 			}else {	
 				// it is also a bad escape
@@ -648,20 +682,20 @@ public:
 			}
 		}
 
-		case 'd': return { edge_category::digits     };
-		case 'D': return { edge_category::non_digits };
-		case 's': return { edge_category::spaces     }; 
-		case 'S': return { edge_category::non_spaces };
-		case 'w': return { edge_category::words      };
-		case 'W': return { edge_category::non_words  };
+		case 'd': return { {edge_category::digits    } };
+		case 'D': return { {edge_category::non_digits} };
+		case 's': return { {edge_category::spaces    } }; 
+		case 'S': return { {edge_category::non_spaces} };
+		case 'w': return { {edge_category::words     } };
+		case 'W': return { {edge_category::non_words } };
 
 		}
 		// idenitity escapes
-		return { edge_category::single_char. *pos };
+		return { {edge_category::single_char, c} };
 
 	}
 
-	pair<error_category, const char_t*> parse(string_view_t s) {
+	tuple<error_category, const char_t*> parse(string_view_t s) {
 		// shunting yard algorithm
 		// operator priority:  *  > (concatnation) > |
 		// supported operator: 
@@ -675,17 +709,17 @@ public:
 		
 		for(auto pos = s.begin(); pos != s.end();) {
 			switch(*pos) {
-			case '*': // kleene closure
-			case '+': // positive closure, (r)+ ::= (r)(r)*
-			case '?': // optional,         (r)? ::= (r)|ε
+			case '*':   // kleene closure
+			case '+':   // positive closure, (r)+ ::= (r)(r)*
+			case '?': { // optional,         (r)? ::= (r)|ε
 
 				// *, +, ? have the highest priorities, so directly reduce it
 				if(!reduce(to_oper(*pos))) return {build_result = error_category::empty_operand, pos};
 				++pos;
 				has_potential_concat_oper = true;
 				break;
-
-			case '|':
+			}
+			case '|': {
 				// alternative / 'or' operator
 				while(!oper_stack.empty() && priority(oper_stack.top()) >= priority(oper::alter)) {
 					if(!reduce()) return {build_result = error_category::empty_operand, pos};
@@ -695,23 +729,23 @@ public:
 				++pos;
 				has_potential_concat_oper = false;
 				break;
-
-			case '(':
+			}
+			case '(': {
 				if(has_potential_concat_oper && !reduce_concat()) return {build_result = error_category::empty_operand, pos};
 				// make_capture_group();
 
 				++max_capture_id;
 				auto dummy_state = new_state();
 				edge capture_begin = edge::make_capture(max_capture_id);
-				dummy_state->add_outgoing(capture_begin, dummy_state);
+				// dummy_state->add_outgoing(capture_begin, dummy_state);
 
 				nfa_stack.emplace(capture_begin, dummy_state, 1);
 				oper_stack.push(oper::lparen);
 				++pos;
 				has_potential_concat_oper = false;
 				break;
-
-			case ')':
+			}
+			case ')': {
 				while(!oper_stack.empty() && oper_stack.top() != oper::lparen) {
 					if(!reduce()) return {build_result = error_category::empty_operand, pos};
 					oper_stack.pop();
@@ -726,7 +760,7 @@ public:
 				++pos;
 				has_potential_concat_oper = true;
 				break;
-
+			}
 			case '[': {
 				// [c...] bracket expression
 				if(++pos == s.end()) return {build_result = error_category::bad_bracket_expression, pos};
@@ -806,14 +840,18 @@ public:
 		assert(nfa_stack.size() == 1);
 
 		// insert start state
+		// auto start_state = insert_new_state(states.begin());
+
 		insert_new_state(states.begin())->add_outgoing(nfa_stack.top().begin_edge);
+
 		final_state = nfa_stack.top().end_state;
 
 		// assign states' id
 		state_id_t id = 0;
-		for(auto& s: states) s->state_id_t = id++;
+		for(auto& s: states) s.id = id++;
 
-		nfa_stack.clear();
+		while(!nfa_stack.empty()) nfa_stack.pop();
+
 		return {build_result = error_category::success, s.end()};
 	}
 
@@ -877,13 +915,13 @@ public:
 						
 						auto to = lex_res.value().data.single_char;
 						// edges.back().set_range(edges.back().range.from, lex_res.value().range.from); 
-						edges.back() = edge::make_range(from, to); // [p-\q]
+						edges.back() = edge::make_range({from, to}); // [p-\q]
 					}else return { std::nullopt };
 				default:
 					// chars
 					// parse_char_literally
 
-					edges.back() = edge::make_range(from, *pos); // [p-q]
+					edges.back() = edge::make_range({from, *pos}); // [p-q]
 					++pos;
 				}
 				state = parse_char_literally;
@@ -917,7 +955,7 @@ public:
 		}
 	}
 
-	void reduce_brackets_invert(nfa_stack_t& nfa_stack, vector<edge>& edges) {
+	void reduce_brackets_invert(vector<edge>& edges) {
 		auto post_state = new_state();
 		if(edges.empty()) {
 			// [^], TODO: what does it means?
@@ -949,7 +987,7 @@ public:
 		} kind;
 		size_t low, high; // m, n
 
-		static constexpr make_error() noexcept {
+		static constexpr braces_result make_error() noexcept {
 			return {error};
 		}
 
@@ -970,11 +1008,6 @@ public:
 		return false; 
 	}
 
-	state_iterator_t top_begin_state() {
-		assert(!nfa_stack.empty() && !states.empty());
-		return nfa_stack.has_second_top() ? std::next(nfa_stack.second_top().end_state) : states.front();
-	}
-
 	// TODO: in the consideration of optimization, let it can create more than one copy, which allow us reuse memo. 
 	// deep copy the stack top sub-nfa before itself
 	subnfa copy_before_top_subnfa(bool remove_capture = true) {
@@ -988,11 +1021,15 @@ public:
 		
 		const auto [begin_edge, end_state, complexity] = nfa_stack.top();
 		const auto begin_state = top_begin_state();
-		unordered_map<const state_iterator_t, state_iterator_t> memo;
+
+		// unordered_map does not support iterator as key, so we use pointer instead 
+		unordered_map<const state_iterator_t, state_iterator_t, state_iterator_hash> memo;
 
 		for(auto it = begin_state; it != end_state; ++it) {
 			memo[it] = insert_new_state(begin_state, it->is_conjunction);
 		}
+		memo[end_state] = insert_new_state(begin_state, end_state->is_conjunction);
+		
 		auto copy_begin_edge = edge{begin_edge, memo[begin_edge.target]};
 
 		if(remove_capture) {
@@ -1013,13 +1050,13 @@ public:
 					else dst->add_outgoing(edge{e, memo[e.target]});
 				}
 			}
-			if(begin_edge.has_capture()) copy_begin_edge.set_capture_end(memo[begin_edge.capture.end]);
+			if(begin_edge.has_capture()) copy_begin_edge.set_capture_end(memo[begin_edge.data.capture.end]);
 		}
 		return {
 			copy_begin_edge, 
 			memo[end_state], 
 			complexity
-		}
+		};
 	}
 
 	// TODO: remake
@@ -1100,12 +1137,12 @@ public:
 					complexity = new_complexity;
 				}else {
 					// m > 1
-					auto [pre_copy_begin_edge, pre_copy_end_state, _] = unroll_fixed_brace_expression(m - 1);
+					auto [pre_copy_begin_edge, pre_copy_end_state, pre_copy_complexity] = unroll_fixed_brace_expression(m - 1);
 
 					auto post_end_state = new_state();
 					end_state->add_outgoing(edge::make_epsilon(post_end_state));
 					
-					auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(n - m, false);
+					auto [copy_begin_edge, copy_end_state, copy_complexity] = unroll_fixed_brace_expression(n - m, false);
 					copy_end_state->add_outgoing(begin_edge);
 					pre_copy_end_state->add_outgoing(copy_begin_edge);
 
@@ -1125,7 +1162,7 @@ public:
 				states.erase(
 					top_begin_state(),
 					std::next(end_state)
-				)
+				);
 				nfa_stack.pop();
 			}else if(m == 1) {
 				// R{1} == R
@@ -1163,7 +1200,7 @@ public:
 				copy_end_state->add_outgoing(begin_edge);
 
 				begin_edge = copy_begin_edge;
-				complexity = new_complexity
+				complexity = new_complexity;
 			}
 			break;
 		}
@@ -1179,7 +1216,7 @@ public:
 			return n;
 		};
 
-		braces_result::kind_category kind = braces_result::error;
+		typename braces_result::kind_category kind = braces_result::error;
 		size_t m, n = 0;
 		while(pos != end && *pos != '}') {
 			// if(*pos == ' ') {++pos; continue;} // spaces are not allowed
@@ -1234,7 +1271,7 @@ public:
 			++it;
 			++nfa_it;
 		}
-		nfa.final_state = final_state->state_id_t;
+		nfa.final_state = final_state->id;
 		nfa.max_capture_id = max_capture_id;
 		return nfa;
 	}
@@ -1267,16 +1304,18 @@ struct non_determinstic_finite_automaton {
 
 	using nfa_builder_t = nfa_builder<char_t>;
 
+	using group_id_t = size_t;
 	using state_id_t = size_t;
 
+	struct capture_info {
+		group_id_t id = 0;
+		state_id_t end;
+	};
+	
 	struct edge {
 
 		edge_category category;
 		state_id_t target;
-		struct capture_info {
-			size_t id = 0;
-			state_id_t end;
-		};
 
 		union edge_data {
 			char_t single_char;
@@ -1386,7 +1425,7 @@ struct non_determinstic_finite_automaton {
 	state_id_t final_state = 0;
 	size_t max_capture_id = 0;
 
-	friend class nfa_builder_t;
+	friend nfa_builder_t;
 
 	state& operator[](state_id_t id) {
 		return states[id];
@@ -1412,7 +1451,7 @@ struct regular_expression_engine {
 	using string_iterator_t = string_view_t::const_iterator;
 	using nfa_t = non_determinstic_finite_automaton<char_t>;
 
-	using state_id_t = nfa_t::state_id_t;
+	using state_id_t = typename nfa_t::state_id_t;
 	using group_id_t = size_t;
 	using capture_result_t = vector<string_view_t>;
 
@@ -1485,20 +1524,20 @@ protected:
 
 public:
 
-	regular_expression_engine(const nfa_t& nfa): nfa{nfa}, contexts(nfa.states.size()) {
+	regular_expression_engine(const nfa_t& nfa): nfa{nfa}, state_contexts(nfa.states.size()) {
 		assert(!nfa.states.empty());
 	}
 
 	regular_expression_engine& reset() {
 		for(auto& s: state_contexts) s.reset();
 		state_contexts.front().active = true;
-		capture_results.clear();
+		// capture_results.clear();
 		return *this;
 	}
 
 	// spread src's state_context to its target state by edges[edge_id]
 	// it should support all kinds of edges, including ε edge
-	void spread_context(state_context& src_context, const nfa_t::edge& e, const string_iterator_t& pos) {
+	void spread_context(state_context& src_context, const typename nfa_t::edge& e, const string_iterator_t& pos) {
 
 		auto dist = e.target;
 		auto& dist_context = state_contexts[dist];
@@ -1549,11 +1588,11 @@ public:
 			que.pop();
 
 			if(auto [it, inserted] = visited.try_emplace(current_state, true); inserted) {
-				for(const auto& e: nfa.edges[current_state].edges) {
+				for(const auto& e: nfa[current_state].edges) {
 					if(e.accept_epsilon() && visited.count(e.target) == 0) {
 						que.push(e.target);
 						// spread the state context
-						spread_context(state_contexts[current_state], e, pos);
+						spread_context(state_contexts[state], e, pos);
 					}
 				}
 			}
@@ -1565,24 +1604,31 @@ public:
 		bool trapped = true;
 		auto it = nfa.states.rbegin();
 		auto context_it = state_contexts.rbegin();
-		for(; it != nfa.states.rend(); ++it, ++context_it) if(context_it->active) {
-			
-			// for each state in state_contexts
-			// reset the current state
-			context_it->active = false;
-			for(const auto& e: it->edges) if(e.accept(*pos)) {
-				spread_context(*context_it, e, pos);
-				trapped = false;
+		state_id_t id = nfa.states.size() - 1;
+		while(it != nfa.states.rend()) {
+			if(context_it->active) {
+				// for each state in state_contexts
+				// reset the current state
+				context_it->active = false;
+				for(const auto& e: it->edges) if(e.accept(*pos)) {
+					spread_context(*context_it, e, pos);
+					do_epsilon_closure(e.target, pos);
+					trapped = false;
+				}
 			}
-			
-			do_epsilon_closure(it, pos);
+			++it;
+			++context_it;
+			--id;
 		}
 		return !trapped;
 	}
 
-	capture_result_t match(string_iterator_t& it, string_iterator_t end){
+	capture_result_t match(string_iterator_t begin, string_iterator_t end){
 		reset();
+		string_iterator_t it = begin;	
+		do_epsilon_closure(0, it);
 		
+
 		while(it != end) {
 			if(!step(it++)) {
 				// failed: can't match
@@ -1594,10 +1640,10 @@ public:
 
 		capture_result_t result(nfa.max_capture_id + 1);
 		// result[0] is the whole match
-		result.front() = s;
+		result.front() = make_string_view(begin, end);
 		for(auto [group_id, capture]: state_contexts[nfa.final_state].captures) {
 			if(capture.completed()) {
-				result[group_id] = {capture.begin, capture.end};
+				result[group_id] = make_string_view(capture.begin, capture.end);
 			}
 		}
 		return result;

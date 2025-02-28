@@ -10,7 +10,7 @@
                 "${file}",
                 "-o",
                 "${fileDirname}\\${fileBasenameNoExtension}.exe",
-                "-Og", 
+                "-O0", 
                 "-g", 
                 "-I\"D:/raiscies/repo/c++/libraries/fmt/include/\"",
                 "-L\"D:/Raiscies/repo/C++/libraries/fmt/build/\"",
