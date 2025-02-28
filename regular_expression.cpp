@@ -971,10 +971,9 @@ public:
 			auto pre_state = insert_new_state(post_state, true); // is_conjunction = true
 
 			for(auto& e: edges) {
-				pre_state->add_outgoing(e.set_target(post_state));
+				pre_state->add_outgoing(e.invert().set_target(post_state));
 			}
 			nfa_stack.emplace(edge::make_epsilon(pre_state), post_state, edges.size() + 1);
-
 		}
 	}
 
