@@ -2,11 +2,12 @@
     "tasks": [
         {
             "type": "cppbuild",
-            "label": "C/C++: g++.exe 生成活动文件",
+            "label": "C/C++: build",
             "command": "C:/msys64/mingw64/bin/g++.exe",
             "args": [
                 "-fdiagnostics-color=always",
                 "-g",
+                "-gdwarf-2", 
                 "${file}",
                 "-o",
                 "${fileDirname}\\${fileBasenameNoExtension}.exe",
@@ -14,7 +15,7 @@
                 "-g", 
                 "-I\"D:/raiscies/repo/c++/libraries/fmt/include/\"",
                 "-L\"D:/Raiscies/repo/C++/libraries/fmt/build/\"",
-                "-l:\"libfmt.a\"",  
+                "-l:\"libfmt.a\"", 
             ],
             "options": {
                 "cwd": "C:/msys64/mingw64/bin"
@@ -26,7 +27,7 @@
                 "kind": "build",
                 "isDefault": true
             },
-            "detail": "调试器生成的任务。"
+            "detail": "c++ build task",
         }
     ],
     "version": "2.0.0"
