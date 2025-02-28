@@ -1610,10 +1610,27 @@ public:
 				// for each state in state_contexts
 				// reset the current state
 				context_it->active = false;
-				for(const auto& e: it->edges) if(e.accept(*pos)) {
-					spread_context(*context_it, e, pos);
-					do_epsilon_closure(e.target, pos);
+				if(it->is_conjunction) {
+					// conjunction state, all of the edges must be accepted
+					// all of the edges point to the same target state
+					bool all_accepted = true;
+					for(const auto& e: it->edges) {
+						if(!e.accept(*pos)) {
+							all_accepted = false;
+							goto next_state;
+						}
+					}
+					// all of the edges are accepted
+					spread_context(*context_it, it->edges.front(), pos);
+					do_epsilon_closure(it->edges.front().target, pos);
 					trapped = false;
+					next_state:;
+				}else {
+					for(const auto& e: it->edges) if(e.accept(*pos)) {
+						spread_context(*context_it, e, pos);
+						do_epsilon_closure(e.target, pos);
+						trapped = false;
+					}
 				}
 			}
 			++it;
