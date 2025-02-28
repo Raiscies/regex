@@ -1010,33 +1010,38 @@ public:
 
 	// TODO: in the consideration of optimization, let it can create more than one copy, which allow us reuse memo. 
 	// deep copy the stack top sub-nfa before itself
-	subnfa copy_before_top_subnfa(bool remove_capture = true) {
+	subnfa copy_before(const subnfa& nfa, state_iterator_t begin_state, bool remove_capture = true) {
 		// deep copy a sub-nfa before the source nfa, and promise states' relative order is not changed,
 		// notice: if the source sub-nfa contains capture, 
 		// at the runtime, the captured string will be reset on the next match
 		// for example: (R){m}, it will only capture the last match string of R, but not m captures of each R match
 		// this should be handle properly.
 
-		// const auto [begin_edge, end_state, complexity] = nfa;
-		
-		const auto [begin_edge, end_state, complexity] = nfa_stack.top();
-		const auto begin_state = top_begin_state();
+		const auto [begin_edge, end_state, complexity] = nfa;		
+		// const auto [begin_edge, end_state, complexity] = nfa_stack.top();
 
 		// unordered_map does not support iterator as key, so we use pointer instead 
 		unordered_map<const state_iterator_t, state_iterator_t, state_iterator_hash> memo;
+
+		// if a state is not in the memo, return itself,
+		// which means if a state is not in the range of src sub-nfa, directly return the state itself, 
+		// but not the dst state it corresponding to.
+		auto memo_get = [&memo] (const state_iterator_t& it) {
+			auto res = memo.find(it);
+			return res == memo.end() ? it : res->second;
+		};
 
 		for(auto it = begin_state; it != end_state; ++it) {
 			memo[it] = insert_new_state(begin_state, it->is_conjunction);
 		}
 		memo[end_state] = insert_new_state(begin_state, end_state->is_conjunction);
-		
-		auto copy_begin_edge = edge{begin_edge, memo[begin_edge.target]};
 
+		auto copy_begin_edge = edge{begin_edge, memo_get(begin_edge.target)};
 		if(remove_capture) {
 			for(auto& [src, dst]: memo) {
 				for(auto& e: src->edges) {
-					if(e.has_capture()) dst->add_outgoing(edge{e, memo[e.target]}.remove_capture());
-					else dst->add_outgoing(edge{e, memo[e.target]});
+					if(e.has_capture()) dst->add_outgoing(edge{e, memo_get(e.target)}.remove_capture());
+					else dst->add_outgoing(edge{e, memo_get(e.target)});
 				}
 			}
 			if(begin_edge.has_capture()) copy_begin_edge.remove_capture();
@@ -1045,21 +1050,20 @@ public:
 			for(auto& [src, dst]: memo) {
 				for(auto& e: src->edges) {
 					if(e.has_capture()) dst->add_outgoing(
-						edge{e, memo[e.target]}.set_capture_end(memo[e.data.capture.end])
+						edge{e, memo_get(e.target)}.set_capture_end(memo_get(e.data.capture.end))
 					);
-					else dst->add_outgoing(edge{e, memo[e.target]});
+					else dst->add_outgoing(edge{e, memo_get(e.target)});
 				}
 			}
-			if(begin_edge.has_capture()) copy_begin_edge.set_capture_end(memo[begin_edge.data.capture.end]);
+			if(begin_edge.has_capture()) copy_begin_edge.set_capture_end(memo_get(begin_edge.data.capture.end));
 		}
 		return {
 			copy_begin_edge, 
-			memo[end_state], 
+			memo_get(end_state), 
 			complexity
 		};
 	}
 
-	// TODO: remake
 	bool try_unroll_brace_expression(const braces_result& braces_res) {
 		// R{m}   == R...R            m times R
 		// R{m,}  == R...R+           m times R
@@ -1072,18 +1076,21 @@ public:
 		// (R){m,n} == R...(R)(R?)...(R?) m times R and n-m times R?, but capture the last R,
 		// here the parentheses identify the same capture
 
+
+		// the sub-nfa to copy is on the top of the stack now
 		auto& [begin_edge, end_state, complexity] = nfa_stack.top();
-
+		auto begin_state = top_begin_state();
+		
 		auto unroll_fixed_brace_expression = 
-			[this](size_t copy_count, bool remove_capture = true) {
-
+			[this, begin_state](size_t copy_count, bool remove_capture = true) {
+ 
+			auto& nfa = nfa_stack.top();
 			assert(copy_count >= 1);
-
-			auto [first_begin_edge, current_end_state, _] = copy_before_top_subnfa(remove_capture);
+			auto [first_begin_edge, current_end_state, _] = copy_before(nfa, begin_state, remove_capture);
 
 			for(size_t i = 0; i < copy_count - 1; ++i) {
 				auto [new_begin_edge, new_end_state, _] 
-					= copy_before_top_subnfa(remove_capture);
+					= copy_before(nfa, begin_state, remove_capture);
 				
 				current_end_state->add_outgoing(new_begin_edge);
 				current_end_state = new_end_state;
@@ -1096,7 +1103,7 @@ public:
 			};
 
 		};
-		
+
 		auto [kind, m, n] = braces_res;
 		complexity_t new_complexity;
 		
@@ -1110,7 +1117,7 @@ public:
 				// (R){m,n} == R{m-1}(R)(R){0,n-m}
 				
 				// TODO: too many branches, need to be optimized
-				auto begin_state = top_begin_state();
+				
 				if(m == 0) {
 					auto post_end_state = new_state();
 					end_state->add_outgoing(edge::make_epsilon(post_end_state));
@@ -1125,7 +1132,6 @@ public:
 					reduce(oper::optional);
 				}else if(m == 1) {
 					// (R){1, n}
-					// auto [copy_begin_edge, copy_end_state, _] = unroll_fixed_brace_expression(m - 1);
 					auto post_end_state = new_state();
 					end_state->add_outgoing(edge::make_epsilon(post_end_state));
 					
@@ -1138,7 +1144,7 @@ public:
 				}else {
 					// m > 1
 					auto [pre_copy_begin_edge, pre_copy_end_state, pre_copy_complexity] = unroll_fixed_brace_expression(m - 1);
-
+// embarassing,,
 					auto post_end_state = new_state();
 					end_state->add_outgoing(edge::make_epsilon(post_end_state));
 					
@@ -1158,17 +1164,11 @@ public:
 				// R{0} == ε
 				// remove useless states
 				// no need to reset the capture group
-				// states.erase(begin_state, std::next(end_state));
-				states.erase(
-					top_begin_state(),
-					std::next(end_state)
-				);
+				states.erase(begin_state, std::next(end_state));
 				nfa_stack.pop();
-			}else if(m == 1) {
-				// R{1} == R
-				// do nothing
-			}else {
-				// R{m} , where m >= 2
+			}else if(m >= 2) {
+				// R{1} == R, so we do nothing
+				// R{m} , where m >= 2, 
 				
 				if((new_complexity = m * complexity) > max_unroll_complexity) return false;
 
