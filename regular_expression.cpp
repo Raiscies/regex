@@ -4,8 +4,9 @@
 	
 	Supported Grammer:
 	concat
-	alter            | 
-	parens            ()
+	alternative       | 
+	marking grouping   ()
+	non-marking grouping (?:)
 	kleene closure    *
 	positive closure  +
 	optional          ?
@@ -13,6 +14,12 @@
 	brackets          [...], [^...]
 	braces            {m} {m,} {m,n}
 
+	TODO: 
+	1. true capture selection of alternative operator
+	2. assertion:
+		2.1 zero-width positive/negative lookahead
+		2.2 word/non-word boundary
+		2.3 line begin/end boundary
 */
 
 #include <set>
@@ -72,8 +79,6 @@ static constexpr std::string_view error_message(error_category category) noexcep
 namespace impl {
 
 using std::list;
-using std::swap;
-using std::move;
 using std::tuple;
 using std::queue;
 using std::stack;
@@ -81,7 +86,6 @@ using std::size_t;
 using std::string;
 using std::vector;
 using std::optional;
-using std::in_place;
 using std::unique_ptr;
 using std::string_view;
 using std::basic_string;
@@ -116,17 +120,26 @@ constexpr basic_string_view<CharT> make_string_view(const CharT* begin, const Ch
 
 enum class oper {
 	// enum value represents the priority of the operators
-	kleene,          // *
-	positive,        // +
-	optional,        // ?
-	concat,          // (concatnation)
-	alter,           // |
-	lparen,          // (
-	rparen,          // ) the priority of right-paren is meanless
-	wildcard,        // . the priority of wildcard is meanless
-	brackets,        // [chars...]
-	brackets_invert, // [^chars...]
-	braces           // {m}, {m,}, {m,n}
+	kleene = 0b0000'0000,        // *
+	positive,                    // +
+	optional,                    // ?
+	concat,                      // (concatnation)
+	alter,                       // |
+	wildcard,                    // . 
+	brackets,                    // [chars...]
+	brackets_invert,             // [^chars...]
+	braces,                      // {m}, {m,}, {m,n}
+	rparen,                      // ) 
+	
+
+
+	// for quickly testing stack's left parentheis
+	lparen_mask = 0b1000'0000,
+	lparen,                      // (
+	lparen_positive_lookahead,   // (?= 
+	lparen_negative_lookahead,   // (?!
+	lparen_non_marking,          // (?:
+	
 };
 
 enum edge_category: char {
@@ -139,6 +152,10 @@ enum edge_category: char {
 	newlines    = 6, // [\n\r](currently unused)
 	all         = 7, // any chars
 
+	// assertions
+	assert_line_begin = 8, // \^
+	assert_word = 9,       // \b
+
 	// inverted ranges 
 	invert_single_char = -single_char,  // [^c]
 	invert_range       = -range,        // [^from-to]
@@ -150,7 +167,9 @@ enum edge_category: char {
 	
 	none               = -all,           // nothing could be accepted
 	
-	
+	// assertions
+	assert_line_end = -assert_line_begin, // $
+	assert_non_word = -assert_word,       // \B
 
 };
 
@@ -206,8 +225,6 @@ struct nfa_builder {
 	static constexpr complexity_t default_unroll_complexity = 2000;
 	complexity_t max_unroll_complexity = default_unroll_complexity;
 
-
-	
 	constexpr nfa_builder() {}
 
 	nfa_builder(string_view_t s) {
@@ -706,8 +723,8 @@ public:
 		if(s.empty()) return {build_result = error_category::empty_pattern, nullptr};
 
 		bool has_potential_concat_oper = false;
-		
-		for(auto pos = s.begin(); pos < s.end();) {
+		auto end = s.end();
+		for(auto pos = s.begin(); pos < end;) {
 			switch(*pos) {
 			case '*':   // kleene closure
 			case '+':   // positive closure, (r)+ ::= (r)(r)*
@@ -732,42 +749,40 @@ public:
 			}
 			case '(': {
 				if(has_potential_concat_oper && !reduce_concat()) return {build_result = error_category::empty_operand, pos};
+				if(++pos == end) return {build_result = error_category::missing_paren, pos};
+				if(auto result = parse_left_parenthesis(pos, end); result != error_category::success)
+					return {build_result = result, pos}; 
 
-				++max_capture_id;
-				auto dummy_state = new_state();
-				edge capture_begin = edge::make_capture(max_capture_id, {}, dummy_state);
-
-				nfa_stack.emplace(capture_begin, dummy_state, 1);
-				oper_stack.push(oper::lparen);
-				++pos;
 				has_potential_concat_oper = false;
 				break;
 			}
 			case ')': {
-				while(!oper_stack.empty() && oper_stack.top() != oper::lparen) {
+				while(
+					!oper_stack.empty() && 
+					(static_cast<underlying_type_t<oper>>(oper_stack.top()) & (static_cast<underlying_type_t<oper>>(oper::lparen_mask))) == 0
+				) {
+
 					if(!reduce()) return {build_result = error_category::empty_operand, pos};
 					oper_stack.pop();
 				}
 
 				if(oper_stack.empty()) return {build_result = error_category::missing_paren, pos}; // error: missing left paren '('
-				else {
-					// the top must be lparen '(', reduce it to build a capture
-					reduce();
-					oper_stack.pop();
-				}
+				// the top of oper_stack must be lparen like: (, (?:, (?=, (?!, 
+				else if(!reduce_left_parenthesis(pos, end)) return {build_result = error_category::empty_operand, pos};
+				oper_stack.pop();
 				++pos;
 				has_potential_concat_oper = true;
 				break;
 			}
 			case '[': {
 				// [c...] bracket expression
-				if(++pos == s.end()) return {build_result = error_category::bad_bracket_expression, pos};
+				if(++pos == end) return {build_result = error_category::bad_bracket_expression, pos};
 				bool invert_range = false;
 				if(*pos == '^') {
 					invert_range = true;
 					++pos;
 				}
-				if(auto brackets_res = parse_brackets(pos, s.end()); brackets_res.has_value()) {
+				if(auto brackets_res = parse_brackets(pos, end); brackets_res.has_value()) {
 					if(has_potential_concat_oper && !reduce_concat()) return {build_result = error_category::empty_operand, pos};
 
 					if(!invert_range) reduce_brackets(brackets_res.value());
@@ -780,7 +795,7 @@ public:
 			}
 			case '{': {
 				// {m}, {m,}, {m,n}  counted repetition expression
-				auto braces_res = parse_braces(++pos, s.end());
+				auto braces_res = parse_braces(++pos, end);
 				if(braces_res.kind == braces_result::error)
 					return {build_result = error_category::bad_brace_expression, pos};
 				if(!reduce_braces(braces_res)) 
@@ -795,7 +810,7 @@ public:
 				switch(*pos) {
 				case '\\':
 					// escape
-					if(auto lex_res = lex_escape(++pos, s.end()); lex_res.has_value()) 
+					if(auto lex_res = lex_escape(++pos, end); lex_res.has_value()) 
 						e = lex_res.value();
 					else return {build_result = error_category::bad_escape, pos};
 					// pos has been moved at lex_escape(), so don't need to ++pos;
@@ -827,9 +842,9 @@ public:
 		while(!oper_stack.empty()) {
 			if(oper_stack.top() == oper::lparen) {
 				// missing right paren ')'
-				return {build_result = error_category::missing_paren, s.end()};
+				return {build_result = error_category::missing_paren, end};
 			}else if(!reduce()) {
-				return {build_result = error_category::empty_operand, s.end()};			
+				return {build_result = error_category::empty_operand, end};			
 			}
 			oper_stack.pop();
 		}
@@ -850,7 +865,7 @@ public:
 
 		while(!nfa_stack.empty()) nfa_stack.pop();
 
-		return {build_result = error_category::success, s.end()};
+		return {build_result = error_category::success, end};
 	}
 
 	bool reduce_concat() {
@@ -862,6 +877,70 @@ public:
 		// empty oper_stack or oper_stack.top() < concat
 		oper_stack.push(oper::concat);
 		return true;
+	}
+
+	bool reduce_left_parenthesis(string_iterator_t& pos, const string_iterator_t& end) {
+		if(nfa_stack.empty()) return false;
+		switch(oper_stack.top()) {
+		case oper::lparen: {	
+			if(nfa_stack.size() < 2) return false; 
+			auto [begin_edge, end_state, complexity] = nfa_stack.top();
+			nfa_stack.pop();
+	
+			auto& [capture_begin_edge, dummy_state, cap_complexity] = nfa_stack.top();
+			dummy_state->add_outgoing(begin_edge);
+			auto capture_end_state = new_state();
+			capture_begin_edge.set_capture_end(capture_end_state);
+			end_state->add_outgoing(edge::make_epsilon(capture_end_state));
+	
+			dummy_state = capture_end_state;
+			cap_complexity += complexity + 1;
+
+			break;
+		}
+		case oper::lparen_non_marking:
+			// do nothing
+			break;
+		case oper::lparen_positive_lookahead: 
+			// TODO
+			break;
+		case oper::lparen_negative_lookahead:
+			// TODO
+			break;
+		}
+		return true;
+	}
+
+	error_category parse_left_parenthesis(string_iterator_t& pos, const string_iterator_t& end) {
+		// assert '(' is comsumed and pos != end
+
+		if(*pos++ != '?') {
+			// is marking
+			++max_capture_id;
+			auto dummy_state = new_state();
+			edge capture_begin = edge::make_capture(max_capture_id, {}, dummy_state);
+			
+			nfa_stack.emplace(capture_begin, dummy_state, 1);
+			oper_stack.push(oper::lparen);
+			return error_category::success;
+		}
+
+		if(pos == end) return error_category::missing_paren;  // (?
+		switch(*pos++) {
+		case ':': // grouping
+			oper_stack.push(oper::lparen_non_marking);
+			break;
+		case '=': // zero-width positive lookahead
+			oper_stack.push(oper::lparen_positive_lookahead);
+			break;
+		case '!': // zero-width negative lookahead
+			oper_stack.push(oper::lparen_negative_lookahead);
+			break;
+		default:  // error: empty operand
+			return error_category::empty_operand; // (?..
+		}
+
+		return error_category::success;
 	}
 
 	optional<vector<edge>> parse_brackets(string_iterator_t& pos, const string_iterator_t& end) {
