@@ -117,7 +117,18 @@ constexpr basic_string_view<CharT> make_string_view(const CharT* begin, const Ch
 	return begin == end ? basic_string_view<CharT>{} : basic_string_view<CharT>{&*begin, static_cast<size_t>(end - begin)};
 }
 
-
+template <typename CharT>
+constexpr int hex_val(CharT x) noexcept{
+	if('0' <= x && x <= '9') {
+		return x - '0';
+	}else if('a' <= x && x <= 'f') {
+		return (x - 'a') + 10;
+	}else {
+		// 'A' <= x && x <= 'F'
+		return (x - 'A') + 10;
+	}
+}
+	
 enum class oper {
 	// enum value represents the priority of the operators
 	kleene = 0b0000'0000,        // *
@@ -134,8 +145,7 @@ enum class oper {
 
 
 	// for quickly testing stack's left parentheis
-	lparen_mask = 0b1000'0000,
-	lparen,                      // (
+	lparen = 0b1000'0000,        // (
 	lparen_positive_lookahead,   // (?= 
 	lparen_negative_lookahead,   // (?!
 	lparen_non_marking,          // (?:
@@ -143,31 +153,34 @@ enum class oper {
 };
 
 enum edge_category: char {
-	epsilon     = 0, // empty edge
 	single_char = 1, // range of one char [from]
-	range       = 2, // range: [from-to]
-	spaces      = 3, // space chars: [\f\n\r\t\v]
-	words       = 4, // identifier chars(words): [0-9a-zA-Z_]
-	digits      = 5, // digit chars: [0-9]
-	newlines    = 6, // [\n\r](currently unused)
-	all         = 7, // any chars
-
-	// assertions
-	assert_line_begin = 8, // \^
-	assert_word = 9,       // \b
-
+	range,           // range: [from-to]
+	spaces,          // space chars: [\f\n\r\t\v]
+	words,           // identifier chars(words): [0-9a-zA-Z_]
+	digits,          // digit chars: [0-9]
+	newlines,        // [\n\r](currently unused)
+	all,             // any chars
+	
 	// inverted ranges 
 	invert_single_char = -single_char,  // [^c]
 	invert_range       = -range,        // [^from-to]
 	non_spaces         = -spaces,       // [^\f\n\r\t\v]
 	non_words          = -words,        // [^0-9a-zA-Z_]
 	non_digits         = -digits,       // [^0-9]
-	
 	non_newlines       = -newlines,     // [^\n\r] (wildcard)
-	
 	none               = -all,           // nothing could be accepted
+
 	
+	// all of the following categories are empty edges 
+	epsilon = 0b0100'0000,
+
+	// capture group begin
+	capture_begin, 
+
 	// assertions
+	assert_line_begin, // ^
+	assert_word,       // \b
+
 	assert_line_end = -assert_line_begin, // $
 	assert_non_word = -assert_word,       // \B
 
@@ -301,7 +314,7 @@ struct nfa_builder {
 			char_t single_char; 
 			// active when category == range
 			range_t range;
-			// active when category == epsilon
+			// active when category == capture_begin
 			capture_info capture;
 
 			constexpr edge_data(): capture{} {}
@@ -332,7 +345,7 @@ struct nfa_builder {
 			category{other.category}, target{target}, data{other.data} {}
 
 		static constexpr edge make_epsilon(state_iterator_t target = {}) noexcept{
-			return {edge_category::epsilon, capture_info{}, target};
+			return {edge_category::epsilon, {}, target};
 		}
 
 		static constexpr edge make_single_char(char_t c, state_iterator_t target = {}) noexcept{
@@ -344,7 +357,7 @@ struct nfa_builder {
 		}
 
 		static constexpr edge make_capture(size_t capture_group_id, state_iterator_t capture_end = {}, state_iterator_t target = {}) noexcept{
-			return {edge_category::epsilon, capture_info{capture_group_id, capture_end}, target};
+			return {edge_category::capture_begin, capture_info{capture_group_id, capture_end}, target};
 		}
 
 		edge& set_target(state_iterator_t target) noexcept{
@@ -358,19 +371,18 @@ struct nfa_builder {
 		}
 
 		bool has_capture() const noexcept{
-			return category == edge_category::epsilon && data.capture.id != 0;
+			return category == edge_category::capture_begin;
 		}
 
 		edge& set_capture_end(state_iterator_t capture_end) {
 			assert(has_capture());
-			// if(has_capture()) 
 			data.capture.end = capture_end;
 			return *this;
 		}
 		edge& remove_capture() noexcept{
-			// if(category == edge_category::epsilon) 
 			assert(has_capture());
-			data.capture.id = 0;
+			// data.capture.id = 0;
+			category = edge_category::epsilon;	
 			return *this;
 		}
 
@@ -384,22 +396,23 @@ struct nfa_builder {
 				case edge_category::single_char: 
 				case edge_category::invert_single_char:
 					res.data.single_char = data.single_char;
-					return res;
+					break;
 				case edge_category::range: 
 				case edge_category::invert_range:
 					res.data.range = data.range;
-					return res;
-				case edge_category::epsilon: 
+					break;
+				// case edge_category::epsilon: 
+				case edge_category::capture_begin:
 					res.data.capture = typename nfa_t::capture_info {
 						data.capture.id, 
-						data.capture.id == 0 ? 0 : data.capture.end->id
+						data.capture.end->id
 					};
-					return res;
+					break;
 				default:
 					// whatever
-					return res;
+					break;
 			}
-
+			return res;
 		}
 
 	}; // edge
@@ -759,7 +772,7 @@ public:
 			case ')': {
 				while(
 					!oper_stack.empty() && 
-					(static_cast<underlying_type_t<oper>>(oper_stack.top()) & (static_cast<underlying_type_t<oper>>(oper::lparen_mask))) == 0
+					(static_cast<underlying_type_t<oper>>(oper_stack.top()) & (static_cast<underlying_type_t<oper>>(oper::lparen))) == 0
 				) {
 
 					if(!reduce()) return {build_result = error_category::empty_operand, pos};
@@ -1351,20 +1364,6 @@ public:
 		return nfa;
 	}
 
-private:
-
-	static constexpr int hex_val(char_t x) noexcept{
-		if('0' <= x && x <= '9') {
-			return x - '0';
-		}else if('a' <= x && x <= 'f') {
-			return (x - 'a') + 10;
-		}else {
-			// 'A' <= x && x <= 'F'
-			return (x - 'A') + 10;
-		}
-	}
-	
-
 }; // nfa_builder
 
 template <typename CharT>
@@ -1401,8 +1400,8 @@ struct non_determinstic_finite_automaton {
 
 		bool accept(char_t c) const noexcept{
 			switch(category) {
-			case edge_category::epsilon: 
-				return false; 
+			// case edge_category::epsilon: 
+			// 	return false; 
 			case edge_category::single_char: // range of one char [from]
 				return c == data.single_char;
 			case edge_category::range:       // range: [from-to]
@@ -1445,14 +1444,8 @@ struct non_determinstic_finite_automaton {
 
 		}
 		bool accept_epsilon() const noexcept{
-			switch(category) {
-				case edge_category::epsilon:
-				// case edge_category::greedy_capture_begin:
-				// case edge_category::nongreedy_capture_begin:
-					return true;
-				default: 
-					return false;
-			} 	
+			return static_cast<underlying_type_t<edge_category>>(category) & 
+		           static_cast<underlying_type_t<edge_category>>(edge_category::epsilon) != 0; 	
 		}
 
 		bool is_epsilon() const noexcept {
@@ -1460,22 +1453,23 @@ struct non_determinstic_finite_automaton {
 		}
 
 		bool is_single_char() const noexcept{
-			return category == edge_category::single_char;
+			return category == edge_category::single_char || category == edge_category::invert_single_char;
 		}
 
 		bool is_range() const noexcept{
-			return category == edge_category::range;
+			return category == edge_category::range || category == edge_category::invert_range;
 		}
 
 		bool is_capture_begin() const noexcept{
-			return category == edge_category::epsilon && data.capture.id != 0;
+			return category == edge_category::capture_begin;
 		}
 
-		edge_category get_category() const noexcept{
-			return category;
-		}
+		// edge_category get_category() const noexcept{
+		// 	return category;
+		// }
 
 		capture_info get_capture() const noexcept{
+			assert(is_capture_begin());
 			return data.capture;
 		}
 
@@ -1632,32 +1626,28 @@ public:
 		if constexpr(shift_pos) ++capture_pos;
 
 		dst_context.active = true;
-		if(e.is_epsilon()) {
-			if(e.data.capture.id != 0) {
-				// is capture begin
-				auto [group_id, capture_end] = e.get_capture();
-				
-				// spread all of the context to the target state
-				// or reset the context
-				if(auto [begin_context_it, inserted] = dst_context.captures.try_emplace(group_id, capture_pos); inserted) {
-					// capture new created
-					// register the end state of this capture
-					// TODO: should we dynamicly do it?
-					// or build the map during nfa building time?
-					capture_end_states.insert({capture_end, group_id});
-				}else {
-					// capture already exists, reset it
-					// *begin_context_it: [group_id, capture]
-					begin_context_it->second.reset(capture_pos);
-				}
-
-				// spread source state context to the destnation state context if exists 
-				for(auto [id, capture]: src_context.captures)
-					if(group_id != id) 
-						dst_context[id] = capture;
+		if(e.is_capture_begin()) {
+			// is capture begin
+			auto [group_id, capture_end] = e.get_capture();
+			
+			// spread all of the context to the target state
+			// or reset the context
+			if(auto [begin_context_it, inserted] = dst_context.captures.try_emplace(group_id, capture_pos); inserted) {
+				// capture new created
+				// register the end state of this capture
+				// TODO: should we dynamicly do it?
+				// or build the map during nfa building time?
+				capture_end_states.insert({capture_end, group_id});
 			}else {
-				dst_context.captures = src_context.captures;
+				// capture already exists, reset it
+				// *begin_context_it: [group_id, capture]
+				begin_context_it->second.reset(capture_pos);
 			}
+
+			// spread source state context to the destnation state context if exists 
+			for(auto [id, capture]: src_context.captures)
+				if(group_id != id) 
+					dst_context[id] = capture;
 		}else {
 			// is a normal edge
 			dst_context.captures = src_context.captures;
