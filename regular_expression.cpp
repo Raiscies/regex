@@ -110,7 +110,7 @@ constexpr bool in_range(const char_range<CharT>& r, CharT x) noexcept { return r
 // so dirty
 template <typename CharT>
 constexpr basic_string_view<CharT> make_string_view(const CharT* begin, const CharT* end) noexcept{
-	return {&*begin, static_cast<size_t>(end - begin)};
+	return begin == end ? basic_string_view<CharT>{} : basic_string_view<CharT>{&*begin, static_cast<size_t>(end - begin)};
 }
 
 
@@ -732,12 +732,10 @@ public:
 			}
 			case '(': {
 				if(has_potential_concat_oper && !reduce_concat()) return {build_result = error_category::empty_operand, pos};
-				// make_capture_group();
 
 				++max_capture_id;
 				auto dummy_state = new_state();
-				edge capture_begin = edge::make_capture(max_capture_id);
-				// dummy_state->add_outgoing(capture_begin, dummy_state);
+				edge capture_begin = edge::make_capture(max_capture_id, {}, dummy_state);
 
 				nfa_stack.emplace(capture_begin, dummy_state, 1);
 				oper_stack.push(oper::lparen);
@@ -1143,7 +1141,6 @@ public:
 				}else {
 					// m > 1
 					auto [pre_copy_begin_edge, pre_copy_end_state, pre_copy_complexity] = unroll_fixed_brace_expression(m - 1);
-// embarassing,,
 					auto post_end_state = new_state();
 					end_state->add_outgoing(edge::make_epsilon(post_end_state));
 					
@@ -1461,33 +1458,43 @@ struct regular_expression_engine {
 
 		struct capture {
 
+			// capture range: [begin, end)
+			// begin == end represents empty string ""
 			string_iterator_t begin, end;
 
-			// bool completed = false;
+		protected:
+			bool is_completed = false;
+		public:
 
 			constexpr capture() noexcept = default;
-			constexpr capture(string_iterator_t begin) noexcept: begin{begin}, end{begin} {}
+			constexpr capture(string_iterator_t begin) noexcept: begin{begin} {}
 			
 			capture& reset(string_iterator_t new_begin) noexcept{
-				begin = end = new_begin;
+				begin = new_begin;
+				is_completed = false;
 				return *this;
 			}
 
 			capture& complete(string_iterator_t pos) noexcept{
-				end = std::next(pos);
+				end = pos;
+				is_completed = true;
 				return *this;
 			}
 
 			bool try_complete(string_iterator_t pos) noexcept{
-				if(end == begin) {
-					 this->end = std::next(pos);
-					 return true;
+				if(not is_completed) {
+					 this->end = pos;
+					 return is_completed = true;
 				}
 				return false;
 			}
 
 			bool completed() const noexcept{
-				return begin != end;
+				return is_completed;
+			}
+
+			string_view_t to_string_view() const noexcept{
+				return is_completed ? make_string_view(begin, end) : string_view_t{};
 			}
 
 		}; // struct capture
@@ -1536,42 +1543,55 @@ public:
 
 	// spread src's state_context to its target state by edges[edge_id]
 	// it should support all kinds of edges, including ε edge
+	template <bool shift_pos = true>
 	void spread_context(state_context& src_context, const typename nfa_t::edge& e, const string_iterator_t& pos) {
 
-		auto dist = e.target;
-		auto& dist_context = state_contexts[dist];
+		auto dst = e.target;
+		auto& dst_context = state_contexts[dst];
+		auto capture_pos = pos;
 
-		dist_context.active = true;
+		if constexpr(shift_pos) ++capture_pos;
+
+		dst_context.active = true;
 		if(e.is_epsilon()) {
 			if(e.data.capture.id != 0) {
 				// is capture begin
-				for(auto [group_id, capture]: src_context.captures) {
-					if(e.get_capture().id == group_id) 
-						dist_context[group_id].reset(pos);
-					else
-						dist_context[group_id] = src_context[group_id];
+				auto [group_id, capture_end] = e.get_capture();
+				
+				// spread all of the context to the target state
+				// or reset the context
+				if(auto [begin_context_it, inserted] = dst_context.captures.try_emplace(group_id, capture_pos); inserted) {
+					// capture new created
+					// register the end state of this capture
+					// TODO: should we dynamicly do it?
+					// or build the map during nfa building time?
+					capture_end_states.insert({capture_end, group_id});
+				}else {
+					// capture already exists, reset it
+					// *begin_context_it: [group_id, capture]
+					begin_context_it->second.reset(capture_pos);
 				}
 
-				// register the end state of this capture
-				// TODO: should we dynamicly do it?
-				// or build the map during nfa building time?
-				capture_end_states.insert({dist, e.get_capture().id});
+				// spread source state context to the destnation state context if exists 
+				for(auto [id, capture]: src_context.captures)
+					if(group_id != id) 
+						dst_context[id] = capture;
 			}else {
-				dist_context.captures = src_context.captures;
+				dst_context.captures = src_context.captures;
 			}
 		}else {
 			// is a normal edge
-			dist_context.captures = src_context.captures;
+			dst_context.captures = src_context.captures;
 		}
-
+		
 		// complete all of the captures
-		for(auto [it, end] = capture_end_states.equal_range(dist); it != end; ++it) { 
+		for(auto [it, end] = capture_end_states.equal_range(dst); it != end; ++it) { 
 			// it->second: group id of being completed capture
-			dist_context[it->second].try_complete(pos);
+			dst_context[it->second].try_complete(capture_pos);
 		}
 	}
 
-
+	template <bool shift_pos = true>
 	void do_epsilon_closure(state_id_t state, const string_iterator_t& pos) {
 		// apply ε-closure to state_contexts
 		// all of the ε-closure(q) always maintains the same context? 
@@ -1591,7 +1611,8 @@ public:
 					if(e.accept_epsilon() && visited.count(e.target) == 0) {
 						que.push(e.target);
 						// spread the state context
-						spread_context(state_contexts[state], e, pos);
+						// notice that the source state context is current_state
+						spread_context<shift_pos>(state_contexts[current_state], e, pos);
 					}
 				}
 			}
@@ -1642,8 +1663,8 @@ public:
 	capture_result_t match(string_iterator_t begin, string_iterator_t end){
 		reset();
 		string_iterator_t it = begin;	
-		do_epsilon_closure(0, it);
-		
+
+		do_epsilon_closure<false>(0, it);	
 
 		while(it != end) {
 			if(!step(it++)) {
@@ -1658,9 +1679,7 @@ public:
 		// result[0] is the whole match
 		result.front() = make_string_view(begin, end);
 		for(auto [group_id, capture]: state_contexts[nfa.final_state].captures) {
-			if(capture.completed()) {
-				result[group_id] = make_string_view(capture.begin, capture.end);
-			}
+			result[group_id] = capture.to_string_view();
 		}
 		return result;
 	}
