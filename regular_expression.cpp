@@ -707,7 +707,7 @@ public:
 
 		bool has_potential_concat_oper = false;
 		
-		for(auto pos = s.begin(); pos != s.end();) {
+		for(auto pos = s.begin(); pos < s.end();) {
 			switch(*pos) {
 			case '*':   // kleene closure
 			case '+':   // positive closure, (r)+ ::= (r)(r)*
@@ -1459,7 +1459,7 @@ struct regular_expression_engine {
 		struct capture {
 
 			// capture range: [begin, end)
-			// begin == end represents empty string ""
+			// begin == end represents empty string view ""
 			string_iterator_t begin, end;
 
 		protected:
