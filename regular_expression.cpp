@@ -141,14 +141,13 @@ enum class oper {
 	brackets_invert,             // [^chars...]
 	braces,                      // {m}, {m,}, {m,n}
 	rparen,                      // ) 
-	
 
 
 	// for quickly testing stack's left parentheis
 	lparen = 0b1000'0000,        // (
-	lparen_positive_lookahead,   // (?= 
-	lparen_negative_lookahead,   // (?!
 	lparen_non_marking,          // (?:
+	lparen_positive_lookahead,   // (?= 
+	lparen_negative_lookahead    // (?!
 	
 };
 
@@ -178,12 +177,16 @@ enum edge_category: char {
 	capture_begin, 
 
 	// assertions
-	assert_line_begin, // ^
-	assert_word,       // \b
+	assertion_mask = epsilon | 0b0010'0000,
 
-	assert_line_end = -assert_line_begin, // $
-	assert_non_word = -assert_word,       // \B
+	assert_line_begin,         // ^ 
+	assert_line_end,           // $
+	
+	assert_word_boundary,      // \b
+	assert_non_word_boundary,  // \B
 
+	assert_positive_lookahead, // (?= )  
+	assert_negative_lookahead  // (?! ) 
 };
 
 template <typename CharT>
@@ -191,7 +194,7 @@ struct non_determinstic_finite_automaton;
 
 template <typename CharT> 
 struct nfa_builder {
-	// a non-determinstic-finite-automaton factory
+	// a factory of non-determinstic-finite-automaton
 	// NFA M = (Q, Σ, δ, q0, f) 
 	
 	/*	sub expression(e) complexity(ψ) algorithm:
@@ -401,7 +404,6 @@ struct nfa_builder {
 				case edge_category::invert_range:
 					res.data.range = data.range;
 					break;
-				// case edge_category::epsilon: 
 				case edge_category::capture_begin:
 					res.data.capture = typename nfa_t::capture_info {
 						data.capture.id, 
@@ -1375,7 +1377,9 @@ struct non_determinstic_finite_automaton {
 	// NFA M = (Q, Σ, δ, q0, f) 
 	using char_t = CharT; // Σ
 	using range_t = char_range<char_t>;
-
+	using string_view_t = basic_string_view<char_t>;
+	using string_iterator_t = string_view_t::iterator;	
+	
 	using nfa_builder_t = nfa_builder<char_t>;
 
 	using group_id_t = size_t;
@@ -1397,6 +1401,17 @@ struct non_determinstic_finite_automaton {
 			capture_info capture;
 		} data;
 
+		static constexpr bool is_word(char_t c) noexcept{
+			return 
+				in_range('0', '9', c) || 
+				in_range('a', 'z', c) || 
+				in_range('A', 'Z', c) || 
+				(c == '_');		
+		}
+		static constexpr bool is_newline(char_t c) noexcept{
+			return c == '\n' || c == '\r';
+		}
+
 
 		bool accept(char_t c) const noexcept{
 			switch(category) {
@@ -1409,19 +1424,16 @@ struct non_determinstic_finite_automaton {
 			case edge_category::spaces:      // space chars: [\t\n\v\f\r] == [\x09-\x0d]
 				return in_range('\x09', '\x0d', c);
 			case edge_category::words:       // identifier chars(words): [0-9a-zA-Z_]
-				return in_range('0', '9', c) || 
-				       in_range('a', 'z', c) || 
-				       in_range('A', 'Z', c) || 
-				       (c == '_');
+				return is_word(c);
 			case edge_category::digits:      // digit chars: [0-9]
 				return in_range('0', '9', c);
 			case edge_category::newlines:
-				return c == '\n' || c == '\r';
+				return is_newline(c);
 			case edge_category::all:
 				return true;
 			// invert ranges 
 			case edge_category::non_newlines:       // [^\n\r]
-				return c != '\n' && c != '\r';
+				return !is_newline(c);
 			case edge_category::invert_single_char: // [^c]
 				return c != data.single_char;
 			case edge_category::invert_range:       // [^from-to]
@@ -1429,11 +1441,7 @@ struct non_determinstic_finite_automaton {
 			case edge_category::non_spaces:         // [^\t\n\v\f\r]
 				return !in_range('\x09', '\x0d', c);
 			case edge_category::non_words:          // [^0-9a-zA-Z_]
-				return not( 
-					in_range('0', '9', c) || 
-			    	in_range('a', 'z', c) || 
-			    	in_range('A', 'Z', c) || 
-			    	(c == '_'));
+				return !is_word(c);
 			case edge_category::non_digits:         // [^0-9]
 				return !in_range('0', '9', c);
 			case edge_category::none:
@@ -1443,7 +1451,36 @@ struct non_determinstic_finite_automaton {
 			}
 
 		}
-		bool accept_epsilon() const noexcept{
+		
+		// notice that tail is the previous position of end
+		// which means that the string range is [begin, tail]
+		bool assertion_accept(string_iterator_t pos, string_iterator_t begin, string_iterator_t tail) const noexcept {
+			swicth(category) {			
+			case edge_category::assert_line_begin:
+				return pos == begin || is_newline(*std::prev(pos));
+			case edge_category::assert_line_end:
+				return pos == tail || is_newline(*std::next(pos)); 
+			case edge_category::assert_word_boundary:
+				if(pos == begin || pos == tail) return is_word(*pos);
+				auto prev = *std::prev(pos);
+				return is_word(prev) ^ is_word(*pos); 
+			case edge_category::assert_non_word_boundary:
+				if(pos == begin || pos == tail) return !is_word(*pos);
+				auto prev = *std::prev(pos);
+				return !(is_word(prev) ^ is_word(*pos));
+
+			// I have no idea for implement them now, 
+			// especially we have to handle a dozen of complicated cases 
+			case edge_category::assert_positive_lookahead:
+				[[fallthrough]]
+			case edge_category::assert_negative_lookahead:
+				[[fallthrough]]
+			default:
+				return true; // no assertion
+			}
+		}
+		
+		bool accept_epsilon() const noexcept {
 			return static_cast<underlying_type_t<edge_category>>(category) & 
 		           static_cast<underlying_type_t<edge_category>>(edge_category::epsilon) != 0; 	
 		}
@@ -1464,9 +1501,10 @@ struct non_determinstic_finite_automaton {
 			return category == edge_category::capture_begin;
 		}
 
-		// edge_category get_category() const noexcept{
-		// 	return category;
-		// }
+		bool is_assertion() const noexcept{
+			return static_cast<underlying_type_t<edge_category>>(category) &
+			       static_cast<underlying_type_t<edge_category>>(edge_category::assertion_mask) != 0;
+		}
 
 		capture_info get_capture() const noexcept{
 			assert(is_capture_begin());
@@ -1601,23 +1639,26 @@ protected:
 	vector<state_context> state_contexts;
 	unordered_multimap<state_id_t, group_id_t> capture_end_states;
 
+	string_iterator_t begin, end, pos;
+
 public:
 
 	regular_expression_engine(const nfa_t& nfa): nfa{nfa}, state_contexts(nfa.states.size()) {
 		assert(!nfa.states.empty());
 	}
 
-	regular_expression_engine& reset() {
+	regular_expression_engine& reset(string_iterator_t new_begin, string_iterator_t new_end) {
 		for(auto& s: state_contexts) s.reset();
 		state_contexts.front().active = true;
-		// capture_results.clear();
+		pos = begin = new_begin;
+		end = new_end;
 		return *this;
 	}
 
 	// spread src's state_context to its target state by edges[edge_id]
 	// it should support all kinds of edges, including ε edge
 	template <bool shift_pos = true>
-	void spread_context(state_context& src_context, const typename nfa_t::edge& e, const string_iterator_t& pos) {
+	void spread_context(state_context& src_context, const typename nfa_t::edge& e) {
 
 		auto dst = e.target;
 		auto& dst_context = state_contexts[dst];
@@ -1661,7 +1702,7 @@ public:
 	}
 
 	template <bool shift_pos = true>
-	void do_epsilon_closure(state_id_t state, const string_iterator_t& pos) {
+	void do_epsilon_closure(state_id_t state) {
 		// apply ε-closure to state_contexts
 		// all of the ε-closure(q) always maintains the same context? 
 		// ε-closure(q) = {q} ∪ {p | p ∈ δ(q, ε) ∪ δ(δ(q, ε), ε) ∪ ...}	
@@ -1688,12 +1729,11 @@ public:
 		}
 	}
 
-	bool step(string_iterator_t pos) {
+	bool step() {
 		// we must reversely iterate runtime states
 		bool trapped = true;
 		auto it = nfa.states.rbegin();
 		auto context_it = state_contexts.rbegin();
-		state_id_t id = nfa.states.size() - 1;
 		while(it != nfa.states.rend()) {
 			if(context_it->active) {
 				// for each state in state_contexts
@@ -1702,18 +1742,13 @@ public:
 				if(it->is_conjunction) {
 					// conjunction state, all of the edges must be accepted
 					// all of the edges point to the same target state
-					bool all_accepted = true;
 					for(const auto& e: it->edges) {
-						if(!e.accept(*pos)) {
-							all_accepted = false;
-							goto next_state;
-						}
+						if(!e.accept(*pos)) goto next_state;
 					}
 					// all of the edges are accepted
 					spread_context(*context_it, it->edges.front(), pos);
 					do_epsilon_closure(it->edges.front().target, pos);
 					trapped = false;
-					next_state:;
 				}else {
 					for(const auto& e: it->edges) if(e.accept(*pos)) {
 						spread_context(*context_it, e, pos);
@@ -1722,25 +1757,27 @@ public:
 					}
 				}
 			}
+			next_state:
 			++it;
 			++context_it;
-			--id;
 		}
 		return !trapped;
 	}
 
 	capture_result_t match(string_iterator_t begin, string_iterator_t end){
-		reset();
-		string_iterator_t it = begin;	
+		reset(begin, end);
+		// string_iterator_t it = begin;	
 
-		do_epsilon_closure<false>(0, it);	
+		do_epsilon_closure<false>(0);	
 
 		while(it != end) {
-			if(!step(it++)) {
+			if(!step()) {
 				// failed: can't match
 				return {}; 
 			}
+			++it;
 		}
+		
 		// failed: can't match
 		if(!state_contexts[nfa.final_state].active) return {};
 
@@ -1754,15 +1791,12 @@ public:
 	}
 
 	capture_result_t match(string_view_t s) {
-		auto it = s.begin();
-		return match(it, s.end());
+		return match(s.begin(), s.end());
 	}
 
 	capture_result_t search(string_iterator_t& it, string_iterator_t end) {
-		
 		while(it != end) {
-			auto current = it;
-			auto result = match(current, end);
+			auto result = match(it, end);
 			if(!result.empty()) return result;
 			++it;
 		}
