@@ -22,7 +22,6 @@
 		2.3 line begin/end boundary
 */
 
-#include <set>
 #include <list>
 #include <stack>
 #include <queue>
@@ -40,6 +39,7 @@
 #include <functional>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <unordered_map>
 
 #include "fmt/core.h"
@@ -89,11 +89,11 @@ using std::optional;
 using std::unique_ptr;
 using std::string_view;
 using std::basic_string;
+using std::unordered_set;
 using std::unordered_map;
 using std::numeric_limits;
 using std::underlying_type_t;
 using std::basic_string_view;
-using std::unordered_multimap;
 
 template <typename CharT>
 struct char_range {
@@ -929,8 +929,8 @@ public:
 	error_category parse_left_parenthesis(string_iterator_t& pos, const string_iterator_t& end) {
 		// assert '(' is comsumed and pos != end
 
-		if(*pos++ != '?') {
-			// is marking
+		if(*pos != '?') {
+			// is marking group
 			++max_capture_id;
 			auto dummy_state = new_state();
 			edge capture_begin = edge::make_capture(max_capture_id, {}, dummy_state);
@@ -939,8 +939,7 @@ public:
 			oper_stack.push(oper::lparen);
 			return error_category::success;
 		}
-
-		if(pos == end) return error_category::missing_paren;  // (?
+		if(++pos == end) return error_category::missing_paren;  // (?
 		switch(*pos++) {
 		case ':': // grouping
 			oper_stack.push(oper::lparen_non_marking);
@@ -1378,7 +1377,7 @@ struct non_determinstic_finite_automaton {
 	using char_t = CharT; // Σ
 	using range_t = char_range<char_t>;
 	using string_view_t = basic_string_view<char_t>;
-	using string_iterator_t = string_view_t::iterator;	
+	using string_iterator_t = typename string_view_t::iterator;	
 	
 	using nfa_builder_t = nfa_builder<char_t>;
 
@@ -1455,37 +1454,39 @@ struct non_determinstic_finite_automaton {
 		// notice that tail is the previous position of end
 		// which means that the string range is [begin, tail]
 		bool assertion_accept(string_iterator_t pos, string_iterator_t begin, string_iterator_t tail) const noexcept {
-			swicth(category) {			
+			switch(category) {			
 			case edge_category::assert_line_begin:
 				return pos == begin || is_newline(*std::prev(pos));
 			case edge_category::assert_line_end:
 				return pos == tail || is_newline(*std::next(pos)); 
-			case edge_category::assert_word_boundary:
+			case edge_category::assert_word_boundary: {
 				if(pos == begin || pos == tail) return is_word(*pos);
 				auto prev = *std::prev(pos);
 				return is_word(prev) ^ is_word(*pos); 
-			case edge_category::assert_non_word_boundary:
+			}
+			case edge_category::assert_non_word_boundary: {
+
 				if(pos == begin || pos == tail) return !is_word(*pos);
 				auto prev = *std::prev(pos);
 				return !(is_word(prev) ^ is_word(*pos));
-
+			}
 			// I have no idea for implement them now, 
 			// especially we have to handle a dozen of complicated cases 
 			case edge_category::assert_positive_lookahead:
-				[[fallthrough]]
+				// [[fallthrough]]
 			case edge_category::assert_negative_lookahead:
-				[[fallthrough]]
+				// [[fallthrough]]
 			default:
 				return true; // no assertion
 			}
 		}
 		
-		bool accept_epsilon() const noexcept {
-			return static_cast<underlying_type_t<edge_category>>(category) & 
-		           static_cast<underlying_type_t<edge_category>>(edge_category::epsilon) != 0; 	
+		bool accept_epsilon() const noexcept{
+			return (static_cast<underlying_type_t<edge_category>>(category) & 
+		           static_cast<underlying_type_t<edge_category>>(edge_category::epsilon)) != 0; 	
 		}
 
-		bool is_epsilon() const noexcept {
+		bool is_epsilon() const noexcept{
 			return category == edge_category::epsilon;
 		}
 
@@ -1608,6 +1609,10 @@ struct regular_expression_engine {
 				return is_completed ? make_string_view(begin, end) : string_view_t{};
 			}
 
+			// size_t size() const noexcept{
+			// 	return is_completed ? std::distance(begin, end) : 0;
+			// }
+
 		}; // struct capture
 
 		
@@ -1637,7 +1642,7 @@ struct regular_expression_engine {
 
 protected:
 	vector<state_context> state_contexts;
-	unordered_multimap<state_id_t, group_id_t> capture_end_states;
+	unordered_map<state_id_t, unordered_set<group_id_t>> capture_end_states;
 
 	string_iterator_t begin, end, pos;
 
@@ -1655,53 +1660,74 @@ public:
 		return *this;
 	}
 
+	// compare contexts and returns whether we should replace the current context with spreader 
+	bool needs_cover_context(const state_context& current, const state_context& spreader) const{
+		for(group_id_t group_id = 1; group_id <= nfa.max_capture_id; ++group_id) {
+			if(current.captures.find(group_id) == current.captures.cend()) return true; 
+			if(spreader.captures.find(group_id) == spreader.captures.cend()) return false;
+		}
+		return true;
+	}
+
 	// spread src's state_context to its target state by edges[edge_id]
 	// it should support all kinds of edges, including ε edge
-	template <bool shift_pos = true>
+	template <bool shift_capture_pos = true>
 	void spread_context(state_context& src_context, const typename nfa_t::edge& e) {
-
 		auto dst = e.target;
 		auto& dst_context = state_contexts[dst];
 		auto capture_pos = pos;
 
-		if constexpr(shift_pos) ++capture_pos;
+		if constexpr(shift_capture_pos) ++capture_pos;
 
-		dst_context.active = true;
-		if(e.is_capture_begin()) {
-			// is capture begin
-			auto [group_id, capture_end] = e.get_capture();
-			
-			// spread all of the context to the target state
-			// or reset the context
-			if(auto [begin_context_it, inserted] = dst_context.captures.try_emplace(group_id, capture_pos); inserted) {
-				// capture new created
-				// register the end state of this capture
-				// TODO: should we dynamicly do it?
-				// or build the map during nfa building time?
-				capture_end_states.insert({capture_end, group_id});
+		// src_context.active is always true..?
+		if(!dst_context.active || needs_cover_context(dst_context, src_context)) {
+			dst_context.active = true;
+			if(e.is_capture_begin()) {
+				// is capture begin
+				auto [group_id, capture_end] = e.get_capture();
+				
+				// spread all of the context to the target state
+				// or reset the context
+				if(auto [begin_context_it, inserted] = dst_context.captures.try_emplace(group_id, capture_pos); inserted) {
+					// capture new created
+					// register the end state of this capture
+					// TODO: should we dynamicly do it?
+					// or build the map during nfa building time?
+					capture_end_states[capture_end].insert(group_id);
+
+				}else {
+					// capture already exists, reset it
+					// *begin_context_it: [group_id, capture]
+					begin_context_it->second.reset(capture_pos);
+				}
+
+				// spread source state context to the destnation state context if exists 
+				// remove all remained bad contexts from dst_context first
+				for(auto it = dst_context.captures.begin(); it != dst_context.captures.end();) {
+					if(it->first != group_id) it = dst_context.captures.erase(it);
+					else ++it;
+				}
+
+				// copy all of the new captures from src_context to dst_context
+				for(auto [id, capture]: src_context.captures)
+					if(id != group_id) 
+						dst_context[id] = capture;
+
 			}else {
-				// capture already exists, reset it
-				// *begin_context_it: [group_id, capture]
-				begin_context_it->second.reset(capture_pos);
+				// is a normal edge
+				dst_context.captures = src_context.captures;
 			}
-
-			// spread source state context to the destnation state context if exists 
-			for(auto [id, capture]: src_context.captures)
-				if(group_id != id) 
-					dst_context[id] = capture;
-		}else {
-			// is a normal edge
-			dst_context.captures = src_context.captures;
 		}
-		
+
 		// complete all of the captures
-		for(auto [it, end] = capture_end_states.equal_range(dst); it != end; ++it) { 
-			// it->second: group id of being completed capture
-			dst_context[it->second].try_complete(capture_pos);
+		if(auto it = capture_end_states.find(dst); it != capture_end_states.cend()) {
+			for(auto id: it->second) // it->second: a set that stores all of the completed group ids on this destination state
+				if(auto cap_it = dst_context.captures.find(id); cap_it != dst_context.captures.end()) 
+					cap_it->second.try_complete(capture_pos);
 		}
 	}
 
-	template <bool shift_pos = true>
+	template <bool shift_capture_pos = true>
 	void do_epsilon_closure(state_id_t state) {
 		// apply ε-closure to state_contexts
 		// all of the ε-closure(q) always maintains the same context? 
@@ -1720,9 +1746,10 @@ public:
 				for(const auto& e: nfa[current_state].edges) {
 					if(e.accept_epsilon() && visited.count(e.target) == 0) {
 						que.push(e.target);
-						// spread the state context
+						// spread the state context if needed
 						// notice that the source state context is current_state
-						spread_context<shift_pos>(state_contexts[current_state], e, pos);
+
+						spread_context<shift_capture_pos>(state_contexts[current_state], e);
 					}
 				}
 			}
@@ -1734,6 +1761,7 @@ public:
 		bool trapped = true;
 		auto it = nfa.states.rbegin();
 		auto context_it = state_contexts.rbegin();
+		auto id = state_contexts.size() - 1;
 		while(it != nfa.states.rend()) {
 			if(context_it->active) {
 				// for each state in state_contexts
@@ -1746,13 +1774,13 @@ public:
 						if(!e.accept(*pos)) goto next_state;
 					}
 					// all of the edges are accepted
-					spread_context(*context_it, it->edges.front(), pos);
-					do_epsilon_closure(it->edges.front().target, pos);
+					spread_context(*context_it, it->edges.front());
+					do_epsilon_closure(it->edges.front().target);
 					trapped = false;
 				}else {
 					for(const auto& e: it->edges) if(e.accept(*pos)) {
-						spread_context(*context_it, e, pos);
-						do_epsilon_closure(e.target, pos);
+						spread_context(*context_it, e);
+						do_epsilon_closure(e.target);
 						trapped = false;
 					}
 				}
@@ -1760,22 +1788,23 @@ public:
 			next_state:
 			++it;
 			++context_it;
+			--id;
 		}
 		return !trapped;
 	}
 
 	capture_result_t match(string_iterator_t begin, string_iterator_t end){
 		reset(begin, end);
-		// string_iterator_t it = begin;	
+		// string_iterator_t it = begin;
 
 		do_epsilon_closure<false>(0);	
 
-		while(it != end) {
+		while(pos != end) {
 			if(!step()) {
 				// failed: can't match
 				return {}; 
 			}
-			++it;
+			++pos;
 		}
 		
 		// failed: can't match
