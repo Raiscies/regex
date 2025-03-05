@@ -22,6 +22,8 @@
 		2.3 line begin/end boundary
 */
 
+// wrong: probaly a incorrect direction
+
 #include <list>
 #include <stack>
 #include <queue>
