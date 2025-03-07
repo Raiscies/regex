@@ -190,6 +190,11 @@ enum edge_category: char {
 	assert_negative_lookahead  // (?! ) 
 };
 
+enum class state_category: char {
+	normal = 0,  // normal state
+	conjunction_begin  // a start state of conjunction nfa structure
+};
+
 template <typename CharT>
 struct non_determinstic_finite_automaton;
 
@@ -253,34 +258,26 @@ struct nfa_builder {
 	// internal representation(IR) of NFA state
 	struct state {
 		
+		state_category category = state_category::normal;
+
 		// out-going edges
 		vector<edge> edges;
-		bool is_conjunction = false;
 
 		// this will be assigned after parsing
 		state_id_t id;
 		
 		constexpr state() noexcept = default;
-		constexpr state(bool is_conjunction) noexcept: 
-		is_conjunction{is_conjunction} {}
-		
+
 		state* add_outgoing(const edge& e) {
 			edges.push_back(e);
 			return this;
 		}
 		
-		state* set_conjunction(bool is_conjunction) {
-			this->is_conjunction = is_conjunction;
-			return this;
-		}
-
 		typename nfa_t::state generate() const{
-			typename nfa_t::state s;
+			typename nfa_t::state s{category};
 			for(const auto& e: edges) {
 				s.edges.push_back(e.generate());
 			}
-			// do weed need this?
-			s.is_conjunction = is_conjunction;
 			return s;
 		}
 	}; // state
@@ -1060,7 +1057,7 @@ public:
 		}else {
 			// [^R1...Rn], this is a conjunction range, 
 			// which means the target state(post_state) is accepted only if all of the edges(^R1, ^R2, ...) is accepted
-			auto pre_state = insert_new_state(post_state, true); // is_conjunction = true
+			auto pre_state = insert_new_state(post_state, state_category::conjunction_begin);
 
 			for(auto& e: edges) {
 				pre_state->add_outgoing(e.invert().set_target(post_state));
@@ -1123,9 +1120,9 @@ public:
 		};
 
 		for(auto it = begin_state; it != end_state; ++it) {
-			memo[it] = insert_new_state(begin_state, it->is_conjunction);
+			memo[it] = insert_new_state(begin_state, it->category);
 		}
-		memo[end_state] = insert_new_state(begin_state, end_state->is_conjunction);
+		memo[end_state] = insert_new_state(begin_state, end_state->category);
 
 		auto copy_begin_edge = edge{begin_edge, memo_get(begin_edge.target)};
 		if(remove_capture) {
@@ -1518,8 +1515,8 @@ struct non_determinstic_finite_automaton {
 
 	struct state {
 		
+		state_category category = state_category::normal;
 		vector<edge> edges;
-		bool is_conjunction = false;
 
 		edge& operator[](size_t i) {
 			return edges[i];
@@ -1782,7 +1779,7 @@ public:
 				// reset the current state
 
 				// context_it->active = false;
-				if(it->is_conjunction) {
+				if(it->category == state_category::conjunction_begin) {
 					// conjunction state, all of the edges must be accepted
 					// all of the edges point to the same target state
 					for(const auto& e: it->edges) {
