@@ -186,7 +186,8 @@ enum edge_category: char {
 	assert_word_boundary,      // \b
 	assert_non_word_boundary,  // \B
 
-	assert_positive_lookahead, // (?= )  
+	// probaly would never be implemented :(
+	assert_positive_lookahead, // (?= ) 
 	assert_negative_lookahead  // (?! ) 
 };
 
@@ -235,10 +236,6 @@ struct nfa_builder {
 
 	using nfa_t = non_determinstic_finite_automaton<char_t>;
 
-	// using state_iterator_t = size_t;
-
-	// using stateset_t = set<state_iterator_t>; // type of Q or Q's subset
-
 	// indicate a sub nfa's complexity
 	using complexity_t = size_t;
 	
@@ -267,7 +264,6 @@ struct nfa_builder {
 		state_id_t id;
 		
 		constexpr state() noexcept = default;
-
 		state* add_outgoing(const edge& e) {
 			edges.push_back(e);
 			return this;
@@ -282,7 +278,6 @@ struct nfa_builder {
 		}
 	}; // state
 
-	// vector<unique_ptr<state>> states;
 	list<state> states;
 	
 	using state_iterator_t = typename list<state>::iterator;
@@ -317,11 +312,14 @@ struct nfa_builder {
 			range_t range;
 			// active when category == capture_begin
 			capture_info capture;
+			// active when category == alternative_end
+			size_t branch_id;
 
 			constexpr edge_data(): capture{} {}
 			constexpr edge_data(char_t c): single_char{c} {}
 			constexpr edge_data(range_t r): range{r} {}
 			constexpr edge_data(capture_info cap): capture{cap} {}
+			constexpr edge_data(size_t b): branch_id{b} {}
 		} data; 
 
 		constexpr edge(edge_category category, char_t single_char, state_iterator_t target = {}) noexcept: 
@@ -359,6 +357,10 @@ struct nfa_builder {
 
 		static constexpr edge make_capture(size_t capture_group_id, state_iterator_t capture_end = {}, state_iterator_t target = {}) noexcept{
 			return {edge_category::capture_begin, capture_info{capture_group_id, capture_end}, target};
+		}
+
+		static constexpr edge make_alternative_end(size_t branch_id, state_iterator_t target = {}) noexcept{
+			return {edge_category::alternative_end, branch_id, target};
 		}
 
 		edge& set_target(state_iterator_t target) noexcept{
@@ -407,6 +409,9 @@ struct nfa_builder {
 						data.capture.id, 
 						data.capture.end->id
 					};
+					break;
+				case edge_category::alternative_end:
+					res.data.branch_id = data.branch_id;
 					break;
 				default:
 					// whatever
@@ -1778,7 +1783,6 @@ public:
 				// for each state in state_contexts
 				// reset the current state
 
-				// context_it->active = false;
 				if(it->category == state_category::conjunction_begin) {
 					// conjunction state, all of the edges must be accepted
 					// all of the edges point to the same target state
