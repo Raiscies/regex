@@ -22,8 +22,6 @@
 		2.3 line begin/end boundary
 */
 
-// wrong: probaly a incorrect direction
-
 #include <list>
 #include <stack>
 #include <queue>
@@ -80,6 +78,7 @@ static constexpr std::string_view error_message(error_category category) noexcep
 
 namespace impl {
 
+using std::swap;
 using std::list;
 using std::tuple;
 using std::queue;
@@ -1611,10 +1610,6 @@ struct regular_expression_engine {
 				return is_completed ? make_string_view(begin, end) : string_view_t{};
 			}
 
-			// size_t size() const noexcept{
-			// 	return is_completed ? std::distance(begin, end) : 0;
-			// }
-
 		}; // struct capture
 
 		
@@ -1644,22 +1639,29 @@ struct regular_expression_engine {
 
 protected:
 	vector<state_context> state_contexts;
+	vector<state_context> next_state_contexts;
 	unordered_map<state_id_t, unordered_set<group_id_t>> capture_end_states;
 
 	string_iterator_t begin, end, pos;
 
 public:
 
-	regular_expression_engine(const nfa_t& nfa): nfa{nfa}, state_contexts(nfa.states.size()) {
+	regular_expression_engine(const nfa_t& nfa): nfa{nfa}, state_contexts(nfa.states.size()), next_state_contexts(nfa.states.size()) {
 		assert(!nfa.states.empty());
 	}
 
 	regular_expression_engine& reset(string_iterator_t new_begin, string_iterator_t new_end) {
-		for(auto& s: state_contexts) s.reset();
+		for(auto& c: state_contexts) c.reset();
+		for(auto& c: next_state_contexts) c.reset();
 		state_contexts.front().active = true;
 		pos = begin = new_begin;
 		end = new_end;
 		return *this;
+	}
+
+	void update_contexts() {
+		std::swap(state_contexts, next_state_contexts);
+		for(auto& c: next_state_contexts) c.reset();
 	}
 
 	// compare contexts and returns whether we should replace the current context with spreader 
@@ -1673,21 +1675,29 @@ public:
 
 	// spread src's state_context to its target state by edges[edge_id]
 	// it should support all kinds of edges, including ε edge
-	template <bool shift_capture_pos = true>
+	template <bool shift_capture_pos = true, bool on_current_context = false>
 	void spread_context(state_context& src_context, const typename nfa_t::edge& e) {
-		auto dst = e.target;
-		auto& dst_context = state_contexts[dst];
+		state_id_t dst = e.target;
+		// auto& dst_context = state_contexts[dst];
+		// auto& dst_context = next_state_contexts[dst];
+		typename vector<state_context>::iterator dst_context_it;
+		if constexpr(on_current_context) 
+			dst_context_it = state_contexts.begin();
+		else 
+			dst_context_it = next_state_contexts.begin();
+		
+		std::advance(dst_context_it, dst);
+		auto& dst_context = *dst_context_it;
+		
 		auto capture_pos = pos;
 
 		if constexpr(shift_capture_pos) ++capture_pos;
 
-		// src_context.active is always true..?
 		if(!dst_context.active || needs_cover_context(dst_context, src_context)) {
 			dst_context.active = true;
 			if(e.is_capture_begin()) {
 				// is capture begin
 				auto [group_id, capture_end] = e.get_capture();
-				
 				// spread all of the context to the target state
 				// or reset the context
 				if(auto [begin_context_it, inserted] = dst_context.captures.try_emplace(group_id, capture_pos); inserted) {
@@ -1729,7 +1739,7 @@ public:
 		}
 	}
 
-	template <bool shift_capture_pos = true>
+	template <bool shift_capture_pos = true, bool on_current_context = false>
 	void do_epsilon_closure(state_id_t state) {
 		// apply ε-closure to state_contexts
 		// all of the ε-closure(q) always maintains the same context? 
@@ -1750,8 +1760,10 @@ public:
 						que.push(e.target);
 						// spread the state context if needed
 						// notice that the source state context is current_state
-
-						spread_context<shift_capture_pos>(state_contexts[current_state], e);
+						if constexpr(on_current_context)
+							spread_context<shift_capture_pos, on_current_context>(state_contexts[current_state], e);
+						else
+							spread_context<shift_capture_pos, on_current_context>(next_state_contexts[current_state], e);
 					}
 				}
 			}
@@ -1768,7 +1780,8 @@ public:
 			if(context_it->active) {
 				// for each state in state_contexts
 				// reset the current state
-				context_it->active = false;
+
+				// context_it->active = false;
 				if(it->is_conjunction) {
 					// conjunction state, all of the edges must be accepted
 					// all of the edges point to the same target state
@@ -1792,14 +1805,15 @@ public:
 			++context_it;
 			--id;
 		}
+		update_contexts();
 		return !trapped;
 	}
 
 	capture_result_t match(string_iterator_t begin, string_iterator_t end){
 		reset(begin, end);
-		// string_iterator_t it = begin;
 
-		do_epsilon_closure<false>(0);	
+		do_epsilon_closure<false, true>(0);
+		// update_contexts();
 
 		while(pos != end) {
 			if(!step()) {
@@ -1808,7 +1822,7 @@ public:
 			}
 			++pos;
 		}
-		
+
 		// failed: can't match
 		if(!state_contexts[nfa.final_state].active) return {};
 
