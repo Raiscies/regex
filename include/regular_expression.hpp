@@ -54,7 +54,8 @@ enum class error_category {
 	missing_paren,
 	bad_bracket_expression,
 	bad_brace_expression,
-	expensive_brace_expression_unroll
+	expensive_brace_expression_unroll, 
+	unsupported_features
 };
 
 
@@ -68,6 +69,7 @@ static constexpr std::string_view error_message(error_category category) noexcep
 	case error_category::bad_bracket_expression: return "bad bracket expression";
 	case error_category::bad_brace_expression:   return "bad brace expression";
 	case error_category::expensive_brace_expression_unroll: return "brace expression is too complex to unroll";
+	case error_category::unsupported_features:   return "unsupported features";
 	}
 	return "";
 }
@@ -868,7 +870,7 @@ public:
 
 				if(oper_stack.empty()) return {build_result = error_category::missing_paren, pos}; // error: missing left paren '('
 				// the top of oper_stack must be lparen like: (, (?:, (?=, (?!, 
-				else if(!reduce_left_parenthesis(pos, end)) return {build_result = error_category::empty_operand, pos};
+				else if(auto result = reduce_left_parenthesis(pos, end); result != error_category::success) return {build_result = result, pos};
 				oper_stack.pop();
 				++pos;
 				has_potential_concat_oper = true;
@@ -979,8 +981,8 @@ public:
 		return true;
 	}
 
-	bool reduce_left_parenthesis(string_iterator_t& pos, const string_iterator_t& end) {
-		if(nfa_stack.empty()) return false;
+	error_category reduce_left_parenthesis(string_iterator_t& pos, const string_iterator_t& end) {
+		if(nfa_stack.empty()) return error_category::empty_operand;
 		switch(oper_stack.top()) {
 		case oper::lparen: {	
 			if(nfa_stack.size() < 2) return false; 
@@ -1002,13 +1004,15 @@ public:
 			// do nothing
 			break;
 		case oper::lparen_positive_lookahead: 
-			// TODO
+			// TODO?
+			return error_category::unsupported_features;
 			break;
 		case oper::lparen_negative_lookahead:
-			// TODO
+			// TODO?
+			return error_category::unsupported_features;
 			break;
 		}
-		return true;
+		return error_category::success;
 	}
 
 	error_category parse_left_parenthesis(string_iterator_t& pos, const string_iterator_t& end) {
