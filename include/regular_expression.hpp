@@ -1,3 +1,4 @@
+#pragma once
 
 /*
 	Regular Expression Interpreter by Raiscies.
@@ -28,22 +29,17 @@
 #include <vector>
 #include <string>
 #include <limits>
-#include <memory>
 #include <cstddef>
 #include <cassert>
 #include <utility>
 #include <iterator>
 #include <optional>
-#include <iostream>
 #include <algorithm>
 #include <functional>
 #include <string_view>
 #include <type_traits>
 #include <unordered_set>
 #include <unordered_map>
-
-#include "fmt/core.h"
-#include "fmt/ranges.h"
 
 namespace rais {
 
@@ -87,14 +83,16 @@ using std::size_t;
 using std::string;
 using std::vector;
 using std::optional;
-using std::unique_ptr;
+using std::remove_cv_t;
 using std::string_view;
 using std::basic_string;
 using std::unordered_set;
 using std::unordered_map;
+using std::is_integral_v;
 using std::numeric_limits;
 using std::underlying_type_t;
 using std::basic_string_view;
+using std::remove_reference_t;
 
 template <typename CharT>
 struct char_range {
@@ -132,7 +130,8 @@ constexpr int hex_val(CharT x) noexcept{
 	
 enum class oper {
 	// enum value represents the priority of the operators
-	kleene = 0b0000'0000,        // *
+	bad_oper = 0b0000'0000,
+	kleene,                      // *
 	positive,                    // +
 	optional,                    // ?
 	concat,                      // (concatnation)
@@ -176,6 +175,7 @@ enum edge_category: char {
 
 	// capture group begin
 	capture_begin, 
+	alternative_end, 
 
 	// assertions
 	assertion_mask = epsilon | 0b0010'0000,
@@ -191,10 +191,96 @@ enum edge_category: char {
 	assert_negative_lookahead  // (?! ) 
 };
 
-enum class state_category: char {
-	normal = 0,  // normal state
-	conjunction_begin  // a start state of conjunction nfa structure
+enum class state_flag: unsigned char {
+	none              = 0b0000'0000,
+	alternative_begin = 0b0000'0001,
+	conjunction_begin = 0b0000'0010, 
+	loopback_end      = 0b0000'0100
 };
+
+constexpr state_flag operator~(const state_flag& flag) noexcept{
+	using underlying_t = underlying_type_t<state_flag>;
+	return static_cast<state_flag>(
+		~static_cast<underlying_t>(flag) 
+	);
+}
+constexpr state_flag operator|(const state_flag& lhs, const state_flag& rhs) noexcept{
+	using underlying_t = underlying_type_t<state_flag>;
+	return static_cast<state_flag>(
+		static_cast<underlying_t>(lhs) | 
+		static_cast<underlying_t>(rhs)
+	);
+}
+constexpr state_flag operator&(const state_flag& lhs, const state_flag& rhs) noexcept{
+	using underlying_t = underlying_type_t<state_flag>;
+	return static_cast<state_flag>(
+		static_cast<underlying_t>(lhs) & 
+		static_cast<underlying_t>(rhs)
+	);
+}
+constexpr state_flag operator^(const state_flag& lhs, const state_flag& rhs) noexcept{
+	using underlying_t = underlying_type_t<state_flag>;
+	return static_cast<state_flag>(
+		static_cast<underlying_t>(lhs) ^ 
+		static_cast<underlying_t>(rhs)
+	);
+}
+constexpr state_flag& operator|=(state_flag& lhs, const state_flag& rhs) noexcept{
+	return lhs = lhs | rhs;
+}
+constexpr state_flag& operator&=(state_flag& lhs, const state_flag& rhs) noexcept{
+	return lhs = lhs & rhs;
+}
+constexpr state_flag& operator^=(state_flag& lhs, const state_flag& rhs) noexcept{
+	return lhs = lhs ^ rhs;
+}
+// template <typename T>
+// constexpr bool operator==(const state_flag& lhs, const T& rhs) noexcept{
+// 	static_assert(is_integral_v<T>);
+// 	return static_cast<underlying_type_t<state_flag>>(lhs) == rhs;
+// }
+// // template <typename T>
+// constexpr bool operator!=(const state_flag& lhs, const T& rhs) noexcept{
+// 	return !(lhs == rhs);
+// }
+template <typename T>
+constexpr bool operator!(const state_flag& flag) noexcept{
+	return static_cast<underlying_type_t<state_flag>>(flag) == 0;
+}
+// struct state_flag {
+// 	enum flag_enum {
+			
+// 	};
+
+// 	bool alternative_begin: 1;
+// 	bool conjunction_begin: 1;
+// 	bool loopback_end: 1;
+
+// 	constexpr state_flag() noexcept: 
+// 		alternative_begin{false}, 
+// 		conjunction_begin{false}, 
+// 		loopback_end{false} 
+// 		{}
+
+// 	constexpr state_flag(
+// 		bool alternative_begin, 
+// 		bool conjunction_begin, 
+// 		bool loopback_end
+// 	) noexcept: 
+// 		alternative_begin{alternative_begin}, 
+// 		conjunction_begin{conjunction_begin},
+// 		loopback_end{loopback_end} {}
+
+// 	static constexpr state_flag make_alternative_begin() noexcept{
+// 		return {true, false, false};
+// 	}
+	
+// 	static constexpr state_flag make_alternative_begin() noexcept{
+// 		return {true, false, false};
+// 	}
+
+	
+// };
 
 template <typename CharT>
 struct non_determinstic_finite_automaton;
@@ -255,7 +341,7 @@ struct nfa_builder {
 	// internal representation(IR) of NFA state
 	struct state {
 		
-		state_category category = state_category::normal;
+		state_flag flag;
 
 		// out-going edges
 		vector<edge> edges;
@@ -270,7 +356,7 @@ struct nfa_builder {
 		}
 		
 		typename nfa_t::state generate() const{
-			typename nfa_t::state s{category};
+			typename nfa_t::state s{flag};
 			for(const auto& e: edges) {
 				s.edges.push_back(e.generate());
 			}
@@ -360,7 +446,7 @@ struct nfa_builder {
 		}
 
 		static constexpr edge make_alternative_end(size_t branch_id, state_iterator_t target = {}) noexcept{
-			return {edge_category::alternative_end, branch_id, target};
+			return {edge_category::alternative_end, edge_data{branch_id}, target};
 		}
 
 		edge& set_target(state_iterator_t target) noexcept{
@@ -469,7 +555,7 @@ struct nfa_builder {
 		case '(': return oper::lparen;
 		case ')': return oper::rparen;
 		case '.': return oper::wildcard;
-		default: return oper(-1);
+		default:  return oper::bad_oper;
 		}
 	}
 
@@ -541,6 +627,8 @@ public:
 				if(nfa_stack.empty()) return false;
 				auto& [begin_edge, end_state, complexity] = nfa_stack.top();
 				
+				// end_state->flag.loopback_end = true;
+				end_state->flag |= state_flag::loopback_end;
 				end_state->add_outgoing(begin_edge);
 				begin_edge = edge::make_epsilon(end_state);
 				complexity += 1;
@@ -601,20 +689,14 @@ public:
 
 				// the new branch_state must priviously be these two sub-nfa,
 				// so we must insert it before the pre_start_state's target state 
-				// auto branch_state = insert_new_state(
-				// 	nfa_stack.has_second_top() ? 
-				// 	std::next(nfa_stack.second_top().end_state) :
-				// 	states.front()
-				// );
-				// auto branch_state = insert_new_state_before_top_nfa();
-				auto branch_state = insert_new_state(top_begin_state());
+				auto branch_state = insert_new_state(top_begin_state(), state_flag::alternative_begin);
 
 				branch_state->add_outgoing(pre_begin_edge)
 					        ->add_outgoing(begin_edge);
 
 				auto merge_state = new_state();
-				pre_end_state->add_outgoing(edge::make_epsilon(merge_state));
-				end_state->add_outgoing(edge::make_epsilon(merge_state));
+				pre_end_state->add_outgoing(edge::make_alternative_end(0, merge_state));
+				end_state->add_outgoing(edge::make_alternative_end(0, merge_state));
 
 				pre_begin_edge = edge::make_epsilon(branch_state);
 				pre_end_state = merge_state;
@@ -1062,7 +1144,7 @@ public:
 		}else {
 			// [^R1...Rn], this is a conjunction range, 
 			// which means the target state(post_state) is accepted only if all of the edges(^R1, ^R2, ...) is accepted
-			auto pre_state = insert_new_state(post_state, state_category::conjunction_begin);
+			auto pre_state = insert_new_state(post_state, state_flag::conjunction_begin);
 
 			for(auto& e: edges) {
 				pre_state->add_outgoing(e.invert().set_target(post_state));
@@ -1125,9 +1207,9 @@ public:
 		};
 
 		for(auto it = begin_state; it != end_state; ++it) {
-			memo[it] = insert_new_state(begin_state, it->category);
+			memo[it] = insert_new_state(begin_state, it->flag);
 		}
-		memo[end_state] = insert_new_state(begin_state, end_state->category);
+		memo[end_state] = insert_new_state(begin_state, end_state->flag);
 
 		auto copy_begin_edge = edge{begin_edge, memo_get(begin_edge.target)};
 		if(remove_capture) {
@@ -1194,7 +1276,6 @@ public:
 				current_end_state
 				// no need to return complexity
 			};
-
 		};
 
 		auto [kind, m, n] = braces_res;
@@ -1401,6 +1482,7 @@ struct non_determinstic_finite_automaton {
 			char_t single_char;
 			range_t range;
 			capture_info capture;
+			size_t branch_id;
 		} data;
 
 		static constexpr bool is_word(char_t c) noexcept{
@@ -1476,9 +1558,9 @@ struct non_determinstic_finite_automaton {
 			// I have no idea for implement them now, 
 			// especially we have to handle a dozen of complicated cases 
 			case edge_category::assert_positive_lookahead:
-				// [[fallthrough]]
+				[[fallthrough]];
 			case edge_category::assert_negative_lookahead:
-				// [[fallthrough]]
+				[[fallthrough]];
 			default:
 				return true; // no assertion
 			}
@@ -1520,7 +1602,7 @@ struct non_determinstic_finite_automaton {
 
 	struct state {
 		
-		state_category category = state_category::normal;
+		state_flag flag;
 		vector<edge> edges;
 
 		edge& operator[](size_t i) {
@@ -1557,9 +1639,9 @@ protected:
 template <typename CharT>
 struct regular_expression_engine {
 
-	using char_t = char;
+	using char_t = CharT;
 	using string_view_t = basic_string_view<char_t>;
-	using string_iterator_t = string_view_t::const_iterator;
+	using string_iterator_t = typename string_view_t::const_iterator;
 	using nfa_t = non_determinstic_finite_automaton<char_t>;
 
 	using state_id_t = typename nfa_t::state_id_t;
@@ -1619,6 +1701,13 @@ struct regular_expression_engine {
 		unordered_map<group_id_t, capture> captures;
 		bool active = false;
 
+		// extra state data
+		union {
+			// active when state category == alternative_end
+			size_t nearest_branch_id;
+		};
+
+
 		state_context() = default;
 
 		state_context& reset() {
@@ -1667,21 +1756,21 @@ public:
 	}
 
 	// compare contexts and returns whether we should replace the current context with spreader 
-	bool needs_cover_context(const state_context& current, const state_context& spreader) const{
+	bool needs_cover_context(const state_context& current, const state_context& spreader, const typename nfa_t::edge& e) const{
 		for(group_id_t group_id = 1; group_id <= nfa.max_capture_id; ++group_id) {
 			if(current.captures.find(group_id) == current.captures.cend()) return true; 
 			if(spreader.captures.find(group_id) == spreader.captures.cend()) return false;
 		}
 		return true;
+
 	}
 
 	// spread src's state_context to its target state by edges[edge_id]
 	// it should support all kinds of edges, including ε edge
 	template <bool shift_capture_pos = true, bool on_current_context = false>
 	void spread_context(state_context& src_context, const typename nfa_t::edge& e) {
+
 		state_id_t dst = e.target;
-		// auto& dst_context = state_contexts[dst];
-		// auto& dst_context = next_state_contexts[dst];
 		typename vector<state_context>::iterator dst_context_it;
 		if constexpr(on_current_context) 
 			dst_context_it = state_contexts.begin();
@@ -1690,14 +1779,16 @@ public:
 		
 		std::advance(dst_context_it, dst);
 		auto& dst_context = *dst_context_it;
-		
+
 		auto capture_pos = pos;
 
 		if constexpr(shift_capture_pos) ++capture_pos;
 
-		if(!dst_context.active || needs_cover_context(dst_context, src_context)) {
+		if(!dst_context.active || needs_cover_context(dst_context, src_context, e)) {
 			dst_context.active = true;
-			if(e.is_capture_begin()) {
+
+			switch(e.category) {
+			case edge_category::capture_begin: {
 				// is capture begin
 				auto [group_id, capture_end] = e.get_capture();
 				// spread all of the context to the target state
@@ -1727,8 +1818,13 @@ public:
 					if(id != group_id) 
 						dst_context[id] = capture;
 
-			}else {
-				// is a normal edge
+				break;
+			}
+			case edge_category::alternative_end:
+				dst_context.nearest_branch_id = e.data.branch_id;
+				[[fallthrough]];
+			default:
+				// normal edges
 				dst_context.captures = src_context.captures;
 			}
 		}
@@ -1748,25 +1844,24 @@ public:
 		// ε-closure(q) = {q} ∪ {p | p ∈ δ(q, ε) ∪ δ(δ(q, ε), ε) ∪ ...}	
 
 		queue<state_id_t> que;
+		unordered_set<state_id_t> visited{state};
+		
 		que.push(state);
-
-		unordered_map<state_id_t, bool> visited;
 
 		while(!que.empty()) {
 			auto current_state = que.front();
 			que.pop();
 
-			if(auto [it, inserted] = visited.try_emplace(current_state, true); inserted) {
-				for(const auto& e: nfa[current_state].edges) {
-					if(e.accept_epsilon() && visited.count(e.target) == 0) {
-						que.push(e.target);
-						// spread the state context if needed
-						// notice that the source state context is current_state
-						if constexpr(on_current_context)
-							spread_context<shift_capture_pos, on_current_context>(state_contexts[current_state], e);
-						else
-							spread_context<shift_capture_pos, on_current_context>(next_state_contexts[current_state], e);
-					}
+			for(const auto& e: nfa[current_state].edges) {
+				if(!e.accept_epsilon()) continue;
+				if(auto [it, inserted] = visited.emplace(e.target); inserted) {
+					que.push(e.target);
+					// spread the state context if needed
+					// notice that the source state context is current_state
+					if constexpr(on_current_context)
+						spread_context<shift_capture_pos, on_current_context>(state_contexts[current_state], e);
+					else
+						spread_context<shift_capture_pos, on_current_context>(next_state_contexts[current_state], e);
 				}
 			}
 		}
@@ -1775,34 +1870,32 @@ public:
 	bool step() {
 		// we must reversely iterate runtime states
 		bool trapped = true;
-		auto it = nfa.states.rbegin();
+		auto state_it = nfa.states.rbegin();
 		auto context_it = state_contexts.rbegin();
 		auto id = state_contexts.size() - 1;
-		while(it != nfa.states.rend()) {
-			if(context_it->active) {
-				// for each state in state_contexts
-				// reset the current state
+		while(state_it != nfa.states.rend()) {
+			if(!context_it->active) goto next_state; 
 
-				if(it->category == state_category::conjunction_begin) {
-					// conjunction state, all of the edges must be accepted
-					// all of the edges point to the same target state
-					for(const auto& e: it->edges) {
-						if(!e.accept(*pos)) goto next_state;
-					}
-					// all of the edges are accepted
-					spread_context(*context_it, it->edges.front());
-					do_epsilon_closure(it->edges.front().target);
+			if((state_it->flag & state_flag::conjunction_begin) != state_flag::none) {
+				// conjunction state, all of the edges must be accepted
+				// all of the edges point to the same target state
+				for(const auto& e: state_it->edges) {
+					if(!e.accept(*pos)) goto next_state;
+				}
+				// all of the edges are accepted
+				spread_context(*context_it, state_it->edges.front());
+				do_epsilon_closure(state_it->edges.front().target);
+				trapped = false;
+			}else {
+				for(const auto& e: state_it->edges) if(e.accept(*pos)) {
+					spread_context(*context_it, e);
+					do_epsilon_closure(e.target);
 					trapped = false;
-				}else {
-					for(const auto& e: it->edges) if(e.accept(*pos)) {
-						spread_context(*context_it, e);
-						do_epsilon_closure(e.target);
-						trapped = false;
-					}
 				}
 			}
+
 			next_state:
-			++it;
+			++state_it;
 			++context_it;
 			--id;
 		}
@@ -1915,40 +2008,3 @@ std::tuple<error_category, impl::non_determinstic_finite_automaton<CharT>> compi
 } // namespace regex
 
 } // namespace rais
-
-int main(int argc, const char** argv) {
-	using std::string;
-	using std::cin;
-	using namespace fmt;
-	using namespace rais::regex;
-
-
-	while(true) {
-		
-		string pattern = "";
-		
-		print("input a pattern:\n");
-		cin >> pattern;
-
-		print("pattern: {}\n", pattern);
-
-		auto [result, nfa] = compile<char>(pattern);
-
-		print("pattern result: {}\n", error_message(result));
-		
-		if(result != error_category::success) continue;
-		regular_expression_engine<char> re{nfa};
-		while(true) {
-			string target;
-			print("input a target string:\n");
-			cin >> target;
-			if(target == "~") break;
-			auto result = re.match(target);
-			print("target = {}, capture: {}\n", target, result);
-
-		}
-		
-	}
-
-	return 0;
-}
