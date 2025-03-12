@@ -84,6 +84,7 @@ using std::stack;
 using std::size_t;
 using std::string;
 using std::vector;
+using std::forward;
 using std::optional;
 using std::remove_cv_t;
 using std::string_view;
@@ -236,53 +237,12 @@ constexpr state_flag& operator&=(state_flag& lhs, const state_flag& rhs) noexcep
 constexpr state_flag& operator^=(state_flag& lhs, const state_flag& rhs) noexcept{
 	return lhs = lhs ^ rhs;
 }
-// template <typename T>
-// constexpr bool operator==(const state_flag& lhs, const T& rhs) noexcept{
-// 	static_assert(is_integral_v<T>);
-// 	return static_cast<underlying_type_t<state_flag>>(lhs) == rhs;
-// }
-// // template <typename T>
-// constexpr bool operator!=(const state_flag& lhs, const T& rhs) noexcept{
-// 	return !(lhs == rhs);
-// }
+
 template <typename T>
 constexpr bool operator!(const state_flag& flag) noexcept{
 	return static_cast<underlying_type_t<state_flag>>(flag) == 0;
 }
-// struct state_flag {
-// 	enum flag_enum {
-			
-// 	};
 
-// 	bool alternative_begin: 1;
-// 	bool conjunction_begin: 1;
-// 	bool loopback_end: 1;
-
-// 	constexpr state_flag() noexcept: 
-// 		alternative_begin{false}, 
-// 		conjunction_begin{false}, 
-// 		loopback_end{false} 
-// 		{}
-
-// 	constexpr state_flag(
-// 		bool alternative_begin, 
-// 		bool conjunction_begin, 
-// 		bool loopback_end
-// 	) noexcept: 
-// 		alternative_begin{alternative_begin}, 
-// 		conjunction_begin{conjunction_begin},
-// 		loopback_end{loopback_end} {}
-
-// 	static constexpr state_flag make_alternative_begin() noexcept{
-// 		return {true, false, false};
-// 	}
-	
-// 	static constexpr state_flag make_alternative_begin() noexcept{
-// 		return {true, false, false};
-// 	}
-
-	
-// };
 
 template <typename CharT>
 struct non_determinstic_finite_automaton;
@@ -293,6 +253,9 @@ struct nfa_builder {
 	// NFA M = (Q, Σ, δ, q0, f) 
 	
 	/*	sub expression(e) complexity(ψ) algorithm:
+
+		TODO: out of dated, needs update
+
 		R = 
 			R or [] or [R] or [^] or [^R]   (R is a single range/edge)
 			             : ψ(R) = 1
@@ -380,9 +343,7 @@ struct nfa_builder {
 	};
 
 	state_iterator_t final_state;
-	// vector<state_iterator_t> capture_groups; // capture groups' end state
 	size_t max_capture_id = 0;
-	
 
 	// internal representation(IR) of NFA::edge
 	struct edge {
@@ -509,6 +470,7 @@ struct nfa_builder {
 		}
 
 	}; // edge
+
 	struct subnfa {
 		edge begin_edge;
 
@@ -533,17 +495,19 @@ struct nfa_builder {
 	
 	static constexpr int priority(oper op) noexcept{
 		switch(op) {
-		case oper::kleene   : 
-		case oper::positive :
-		case oper::optional : 
-		case oper::brackets :
-		case oper::brackets_invert:
-		case oper::braces   :  
-			return 0;
-		case oper::concat   : return -1;
-		case oper::alter    : return -2;
-		case oper::lparen   : return -3;
-		default: return -114514;
+		
+		// useless, unary operators always have the highest priority
+		// case oper::kleene   : 
+		// case oper::positive :
+		// case oper::optional : 
+		// case oper::brackets :
+		// case oper::brackets_invert:
+		// case oper::braces   :  
+		// 	return 0;
+		case oper::concat   : return -1; // (concatenation)
+		case oper::alter    : return -2; // |
+		case oper::lparen   : return -3; // (
+		default: return numeric_limits<int>::min();
 		}
 	}
 
@@ -563,8 +527,6 @@ struct nfa_builder {
 
 
 protected:
-	
-	// stack<subnfa, vector<subnfa>> nfa_stack;
 	
 	// we don't directly use stack cause sometimes we need to assess the 2th top element of the stack,
 	// but don't want to pop the top, access it and push it back. 
@@ -595,7 +557,6 @@ public:
 	void reset() {
 		states.clear();
 		final_state = {};
-		// capture_groups.clear();
 		build_result = error_category::ready;
 	}
 	
@@ -607,12 +568,12 @@ public:
 	template <typename... Args>
 	state_iterator_t new_state(Args&&... args) {
 		// return states.emplace_back(std::make_unique<state>(args...)).get();
-		states.emplace_back(args...);
+		states.emplace_back(forward<Args>(args)...);
 		return --states.end();
 	}
 	template <typename... Args>
 	state_iterator_t insert_new_state(state_iterator_t it, Args&&... args) {
-		return states.insert(it, state{args...});
+		return states.insert(it, state{forward<Args>(args)...});
 	}
 
 	// reduce current sub-nfa and then push to stack, 
@@ -642,6 +603,7 @@ public:
 				if(nfa_stack.empty()) return false;
 				auto& [begin_edge, end_state, complexity] = nfa_stack.top();
 				
+				end_state->flag |= state_flag::loopback_end;
 				end_state->add_outgoing(begin_edge);
 				complexity += 1;
 				break;
@@ -698,7 +660,7 @@ public:
 
 				auto merge_state = new_state();
 				pre_end_state->add_outgoing(edge::make_alternative_end(0, merge_state));
-				end_state->add_outgoing(edge::make_alternative_end(0, merge_state));
+				end_state->add_outgoing(edge::make_alternative_end(1, merge_state));
 
 				pre_begin_edge = edge::make_epsilon(branch_state);
 				pre_end_state = merge_state;
@@ -765,7 +727,8 @@ public:
 				W: different from letter, digit or '_' 
 	
 		*/
-		// assume pos != end
+		assert(pos != end);
+
 		char_t c = *pos++;
 		switch(c) {
 		// control escapes:
@@ -814,12 +777,9 @@ public:
 
 	}
 
-	tuple<error_category, const char_t*> parse(string_view_t s) {
+	tuple<error_category, string_iterator_t> parse(string_view_t s) {
 		// shunting yard algorithm
-		// operator priority:  *  > (concatnation) > |
-		// supported operator: 
-		// *,  |, (concatnation), ., 
-		
+
 		reset();
 		
 		if(s.empty()) return {build_result = error_category::empty_pattern, nullptr};
@@ -954,9 +914,6 @@ public:
 		// is the element count of nfa_stack possible to be more then 1?
 		assert(nfa_stack.size() == 1);
 
-		// insert start state
-		// auto start_state = insert_new_state(states.begin());
-
 		insert_new_state(states.begin())->add_outgoing(nfa_stack.top().begin_edge);
 
 		final_state = nfa_stack.top().end_state;
@@ -985,7 +942,7 @@ public:
 		if(nfa_stack.empty()) return error_category::empty_operand;
 		switch(oper_stack.top()) {
 		case oper::lparen: {	
-			if(nfa_stack.size() < 2) return false; 
+			if(nfa_stack.size() < 2) return error_category::empty_operand; 
 			auto [begin_edge, end_state, complexity] = nfa_stack.top();
 			nfa_stack.pop();
 	
@@ -1183,11 +1140,11 @@ public:
 			return true;
 		}
 		// TODO: implement counted repetition loop? is it possible?
-		// we probaly need to do something on the runtime machine, a 'stateful' state
+		// we probaly need to do something on the runtime machine, add more things to state_context
 		return false; 
 	}
 
-	// TODO: in the consideration of optimization, let it can create more than one copy, which allow us reuse memo. 
+	// TODO: in the consideration of optimization, let it can create more than one copy, which allows us reuse memo. 
 	// deep copy the stack top sub-nfa before itself
 	subnfa copy_before(const subnfa& nfa, state_iterator_t begin_state, bool remove_capture = true) {
 		// deep copy a sub-nfa before the source nfa, and promise states' relative order is not changed,
@@ -1429,7 +1386,7 @@ public:
 		return {kind, m, n};
 	}
 
-	error_category get_result() const noexcept {
+	error_category get_result() const noexcept{
 		return build_result;
 	}
 
@@ -1459,7 +1416,6 @@ template <typename CharT>
 struct non_determinstic_finite_automaton {
 	// output of nfa_builder, 
 	// a non-determinstic-finite-automaton(NFA)
-
 
 	// NFA M = (Q, Σ, δ, q0, f) 
 	using char_t = CharT; // Σ
@@ -1500,7 +1456,6 @@ struct non_determinstic_finite_automaton {
 			return c == '\n' || c == '\r';
 		}
 
-
 		bool accept(char_t c) const noexcept{
 			switch(category) {
 			// case edge_category::epsilon: 
@@ -1540,35 +1495,36 @@ struct non_determinstic_finite_automaton {
 
 		}
 		
-		// notice that tail is the previous position of end
-		// which means that the string range is [begin, tail]
-		bool assertion_accept(string_iterator_t pos, string_iterator_t begin, string_iterator_t tail) const noexcept {
-			switch(category) {			
-			case edge_category::assert_line_begin:
-				return pos == begin || is_newline(*std::prev(pos));
-			case edge_category::assert_line_end:
-				return pos == tail || is_newline(*std::next(pos)); 
-			case edge_category::assert_word_boundary: {
-				if(pos == begin || pos == tail) return is_word(*pos);
-				auto prev = *std::prev(pos);
-				return is_word(prev) ^ is_word(*pos); 
-			}
-			case edge_category::assert_non_word_boundary: {
+		// TODO
+		// // notice that tail is the previous position of end
+		// // which means that the string range is [begin, tail]
+		// bool assertion_accept(string_iterator_t pos, string_iterator_t begin, string_iterator_t tail) const noexcept {
+		// 	switch(category) {			
+		// 	case edge_category::assert_line_begin:
+		// 		return pos == begin || is_newline(*std::prev(pos));
+		// 	case edge_category::assert_line_end:
+		// 		return pos == tail || is_newline(*std::next(pos)); 
+		// 	case edge_category::assert_word_boundary: {
+		// 		if(pos == begin || pos == tail) return is_word(*pos);
+		// 		auto prev = *std::prev(pos);
+		// 		return is_word(prev) ^ is_word(*pos); 
+		// 	}
+		// 	case edge_category::assert_non_word_boundary: {
 
-				if(pos == begin || pos == tail) return !is_word(*pos);
-				auto prev = *std::prev(pos);
-				return !(is_word(prev) ^ is_word(*pos));
-			}
-			// I have no idea for implement them now, 
-			// especially we have to handle a dozen of complicated cases 
-			case edge_category::assert_positive_lookahead:
-				[[fallthrough]];
-			case edge_category::assert_negative_lookahead:
-				[[fallthrough]];
-			default:
-				return true; // no assertion
-			}
-		}
+		// 		if(pos == begin || pos == tail) return !is_word(*pos);
+		// 		auto prev = *std::prev(pos);
+		// 		return !(is_word(prev) ^ is_word(*pos));
+		// 	}
+		// 	// I have no idea for implement them now, 
+		// 	// especially we have to handle a dozen of complicated cases 
+		// 	case edge_category::assert_positive_lookahead:
+		// 		[[fallthrough]];
+		// 	case edge_category::assert_negative_lookahead:
+		// 		[[fallthrough]];
+		// 	default:
+		// 		return true; // no assertion
+		// 	}
+		// }
 		
 		bool accept_epsilon() const noexcept{
 			return (static_cast<underlying_type_t<edge_category>>(category) & 
@@ -1708,7 +1664,7 @@ struct regular_expression_engine {
 		// extra state data
 		union {
 			// active when state category == alternative_end
-			size_t nearest_branch_id;
+			size_t source_branch_id;
 		};
 
 
@@ -1825,7 +1781,7 @@ public:
 				break;
 			}
 			case edge_category::alternative_end:
-				dst_context.nearest_branch_id = e.data.branch_id;
+				dst_context.source_branch_id = e.data.branch_id;
 				[[fallthrough]];
 			default:
 				// normal edges
