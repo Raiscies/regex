@@ -1,5 +1,7 @@
 
 #include <string>
+#include <utility>
+#include <iterator>
 #include <iostream>
 
 #include "fmt/core.h"
@@ -8,10 +10,10 @@
 #include "../include/regular_expression.hpp"
 
 
-
 int main(int argc, const char** argv) {
-	using std::string;
 	using std::cin;
+	using std::string;
+	using std::distance;
 	using namespace fmt;
 	using namespace rais::regex;
 
@@ -37,10 +39,15 @@ int main(int argc, const char** argv) {
 			cin >> target;
 			if(target == "~") break;
 			auto result = re.match(target);
-			print("target = {}, capture: {}\n", target, result);
-
+			print("target = {}, capture: [", target);
+			size_t i = 0;
+			for(const auto& m: result) {
+				auto shift_dist = distance(std::as_const(target).data(), m.data());
+				print("\"{}\"[{},{}]", m, shift_dist, shift_dist + m.size() - 1);
+				if(++i < result.size()) print(", ");
+			}
+			print("]\n");
 		}
-		
 	}
 
 	return 0;

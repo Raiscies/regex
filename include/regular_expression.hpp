@@ -178,7 +178,7 @@ enum edge_category: char {
 
 	// capture group begin
 	capture_begin, 
-	alternative_end, 
+	branch_end, 
 
 	// assertions
 	assertion_mask = epsilon | 0b0010'0000,
@@ -295,7 +295,7 @@ struct nfa_builder {
 	static constexpr complexity_t default_unroll_complexity = 2000;
 	complexity_t max_unroll_complexity = default_unroll_complexity;
 
-	constexpr nfa_builder() {}
+	constexpr nfa_builder() = default;
 
 	nfa_builder(string_view_t s) {
 		parse(s);
@@ -345,7 +345,7 @@ struct nfa_builder {
 	state_iterator_t final_state;
 	size_t max_capture_id = 0;
 
-	// internal representation(IR) of NFA::edge
+	// internal representation(IR) of NFA edge
 	struct edge {
 		edge_category category;
 		state_iterator_t target; 
@@ -361,7 +361,7 @@ struct nfa_builder {
 			range_t range;
 			// active when category == capture_begin
 			capture_info capture;
-			// active when category == alternative_end
+			// active when category == branch_end
 			size_t branch_id;
 
 			constexpr edge_data(): capture{} {}
@@ -408,8 +408,8 @@ struct nfa_builder {
 			return {edge_category::capture_begin, capture_info{capture_group_id, capture_end}, target};
 		}
 
-		static constexpr edge make_alternative_end(size_t branch_id, state_iterator_t target = {}) noexcept{
-			return {edge_category::alternative_end, edge_data{branch_id}, target};
+		static constexpr edge make_branch_end(size_t branch_id, state_iterator_t target = {}) noexcept{
+			return {edge_category::branch_end, edge_data{branch_id}, target};
 		}
 
 		edge& set_target(state_iterator_t target) noexcept{
@@ -459,7 +459,7 @@ struct nfa_builder {
 						data.capture.end->id
 					};
 					break;
-				case edge_category::alternative_end:
+				case edge_category::branch_end:
 					res.data.branch_id = data.branch_id;
 					break;
 				default:
@@ -474,15 +474,9 @@ struct nfa_builder {
 	struct subnfa {
 		edge begin_edge;
 
-		// // all of the states between begin_state to end_state are belong to this sub-nfa, 
-		// // notice: begin_state.target is gernally not equal to begin_state
-		// state_iterator_t begin_state; // the state with the lowest index of the sub-nfa 
 		state_iterator_t end_state;   // the state with the highest index of the sub-nfa
 
 		complexity_t complexity;
-
-		// constexpr subnfa(const edge& begin_edge, state_iterator_t begin_state, state_iterator_t end_state, complexity_t complexity) noexcept: 
-		// 	begin_edge{begin_edge}, begin_state{begin_state}, end_state{end_state}, complexity{complexity} {}
 
 		constexpr subnfa(const subnfa&) noexcept = default;
 		constexpr subnfa(edge begin_edge, state_iterator_t end_state) noexcept: 
@@ -535,11 +529,11 @@ protected:
 
 		// it is UB if size() < 2
 		constexpr typename stack_t::const_reference second_top() const{
-			// return this->C[size() - 2]; 
+			// return this->c[size() - 2]; 
 			return *++this->c.crbegin(); // slightly released inner container constrain
 		}
 		constexpr typename stack_t::reference second_top() {
-			// return this->C[size() - 2];
+			// return this->c[size() - 2];
 			return *++this->c.rbegin();
 		}
 
@@ -567,7 +561,6 @@ public:
 
 	template <typename... Args>
 	state_iterator_t new_state(Args&&... args) {
-		// return states.emplace_back(std::make_unique<state>(args...)).get();
 		states.emplace_back(forward<Args>(args)...);
 		return --states.end();
 	}
@@ -659,8 +652,8 @@ public:
 					        ->add_outgoing(begin_edge);
 
 				auto merge_state = new_state();
-				pre_end_state->add_outgoing(edge::make_alternative_end(0, merge_state));
-				end_state->add_outgoing(edge::make_alternative_end(1, merge_state));
+				pre_end_state->add_outgoing(edge::make_branch_end(0, merge_state));
+				end_state->add_outgoing(edge::make_branch_end(1, merge_state));
 
 				pre_begin_edge = edge::make_epsilon(branch_state);
 				pre_end_state = merge_state;
@@ -1123,11 +1116,11 @@ public:
 		} kind;
 		size_t low, high; // m, n
 
-		static constexpr braces_result make_error() noexcept {
+		static constexpr braces_result make_error() noexcept{
 			return {error};
 		}
 
-		friend constexpr bool operator==(const braces_result& l, const braces_result& r) noexcept {
+		friend constexpr bool operator==(const braces_result& l, const braces_result& r) noexcept{
 			if(l.kind == r.kind) {
 				return l.kind == error || l.low == r.low && l.high == r.high;
 			}else return false;
@@ -1663,7 +1656,7 @@ struct regular_expression_engine {
 
 		// extra state data
 		union {
-			// active when state category == alternative_end
+			// active when state category == branch_end
 			size_t source_branch_id;
 		};
 
@@ -1715,20 +1708,23 @@ public:
 		for(auto& c: next_state_contexts) c.reset();
 	}
 
-	// compare contexts and returns whether we should replace the current context with spreader 
-	bool needs_cover_context(const state_context& current, const state_context& spreader, const typename nfa_t::edge& e) const{
-		for(group_id_t group_id = 1; group_id <= nfa.max_capture_id; ++group_id) {
-			if(current.captures.find(group_id) == current.captures.cend()) return true; 
-			if(spreader.captures.find(group_id) == spreader.captures.cend()) return false;
-		}
-		return true;
-
+	// compare contexts and returns whether we should replace the current context with propagator 
+	constexpr bool needs_cover_context(const state_context& current, const state_context& propagator, const typename nfa_t::edge& e) const noexcept{
+		return 
+			// directly cover if current state is inactive
+			!current.active ||
+			// or destination state is not the end of branch structure
+			e.category != edge_category::branch_end ||
+			// or cover the context if current id is greater or equals to the propagator's
+			// e.data.branch_id: the branch id that the propagator passes
+			// current.source_branch_id: the branch id that current state passes
+			current.source_branch_id >= e.data.branch_id;
 	}
 
-	// spread src's state_context to its target state by edges[edge_id]
+	// propagate src's state_context to its target state by edges[edge_id]
 	// it should support all kinds of edges, including ε edge
 	template <bool shift_capture_pos = true, bool on_current_context = false>
-	void spread_context(state_context& src_context, const typename nfa_t::edge& e) {
+	void propagate_context(state_context& src_context, const typename nfa_t::edge& e) {
 
 		state_id_t dst = e.target;
 		typename vector<state_context>::iterator dst_context_it;
@@ -1744,14 +1740,14 @@ public:
 
 		if constexpr(shift_capture_pos) ++capture_pos;
 
-		if(!dst_context.active || needs_cover_context(dst_context, src_context, e)) {
+		if(needs_cover_context(dst_context, src_context, e)) {
 			dst_context.active = true;
 
 			switch(e.category) {
 			case edge_category::capture_begin: {
 				// is capture begin
 				auto [group_id, capture_end] = e.get_capture();
-				// spread all of the context to the target state
+				// propagate all of the context to the target state
 				// or reset the context
 				if(auto [begin_context_it, inserted] = dst_context.captures.try_emplace(group_id, capture_pos); inserted) {
 					// capture new created
@@ -1766,7 +1762,7 @@ public:
 					begin_context_it->second.reset(capture_pos);
 				}
 
-				// spread source state context to the destnation state context if exists 
+				// propagate source state context to the destnation state context if exists 
 				// remove all remained bad contexts from dst_context first
 				for(auto it = dst_context.captures.begin(); it != dst_context.captures.end();) {
 					if(it->first != group_id) it = dst_context.captures.erase(it);
@@ -1780,7 +1776,7 @@ public:
 
 				break;
 			}
-			case edge_category::alternative_end:
+			case edge_category::branch_end:
 				dst_context.source_branch_id = e.data.branch_id;
 				[[fallthrough]];
 			default:
@@ -1789,7 +1785,7 @@ public:
 			}
 		}
 
-		// complete all of the captures
+		// complete all of the possible captures 
 		if(auto it = capture_end_states.find(dst); it != capture_end_states.cend()) {
 			for(auto id: it->second) // it->second: a set that stores all of the completed group ids on this destination state
 				if(auto cap_it = dst_context.captures.find(id); cap_it != dst_context.captures.end()) 
@@ -1816,12 +1812,12 @@ public:
 				if(!e.accept_epsilon()) continue;
 				if(auto [it, inserted] = visited.emplace(e.target); inserted) {
 					que.push(e.target);
-					// spread the state context if needed
+					// propagate the state context if needed
 					// notice that the source state context is current_state
 					if constexpr(on_current_context)
-						spread_context<shift_capture_pos, on_current_context>(state_contexts[current_state], e);
+						propagate_context<shift_capture_pos, on_current_context>(state_contexts[current_state], e);
 					else
-						spread_context<shift_capture_pos, on_current_context>(next_state_contexts[current_state], e);
+						propagate_context<shift_capture_pos, on_current_context>(next_state_contexts[current_state], e);
 				}
 			}
 		}
@@ -1843,12 +1839,12 @@ public:
 					if(!e.accept(*pos)) goto next_state;
 				}
 				// all of the edges are accepted
-				spread_context(*context_it, state_it->edges.front());
+				propagate_context(*context_it, state_it->edges.front());
 				do_epsilon_closure(state_it->edges.front().target);
 				trapped = false;
 			}else {
 				for(const auto& e: state_it->edges) if(e.accept(*pos)) {
-					spread_context(*context_it, e);
+					propagate_context(*context_it, e);
 					do_epsilon_closure(e.target);
 					trapped = false;
 				}
