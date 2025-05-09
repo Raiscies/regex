@@ -17,7 +17,6 @@ int main(int argc, const char** argv) {
 	using namespace fmt;
 	using namespace rais::regex;
 
-
 	while(true) {
 		
 		string pattern = "";
@@ -35,15 +34,19 @@ int main(int argc, const char** argv) {
 		regular_expression_engine<char> re{nfa};
 		while(true) {
 			string target;
-			print("input a target string:\n");
+			print("input a target string(input ~ to set a new pattern):\n");
 			cin >> target;
 			if(target == "~") break;
 			auto result = re.match(target);
 			print("target = {}, capture: [", target);
 			size_t i = 0;
 			for(const auto& m: result) {
-				auto shift_dist = distance(std::as_const(target).data(), m.data());
-				print("\"{}\"[{},{}]", m, shift_dist, shift_dist + m.size() - 1);
+				if(m.empty()) {
+					print("\"\"[-,-]");
+				}else {
+					auto shift_dist = distance(std::as_const(target).data(), m.data());
+					print("\"{}\"[{},{}]", m, shift_dist, shift_dist + m.size() - 1);
+				}
 				if(++i < result.size()) print(", ");
 			}
 			print("]\n");

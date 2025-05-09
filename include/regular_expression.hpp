@@ -111,7 +111,7 @@ template <typename CharT>
 constexpr bool in_range(CharT a, CharT b, CharT x) noexcept{ return a <= x && x <= b; }
 
 template <typename CharT>
-constexpr bool in_range(const char_range<CharT>& r, CharT x) noexcept { return r.is_member(x); }
+constexpr bool in_range(const char_range<CharT>& r, CharT x) noexcept{ return r.is_member(x); }
 
 // so dirty
 template <typename CharT>
@@ -1708,17 +1708,25 @@ public:
 		for(auto& c: next_state_contexts) c.reset();
 	}
 
+	
 	// compare contexts and returns whether we should replace the current context with propagator 
 	constexpr bool needs_cover_context(const state_context& current, const state_context& propagator, const typename nfa_t::edge& e) const noexcept{
-		return 
-			// directly cover if current state is inactive
-			!current.active ||
-			// or destination state is not the end of branch structure
-			e.category != edge_category::branch_end ||
-			// or cover the context if current id is greater or equals to the propagator's
-			// e.data.branch_id: the branch id that the propagator passes
-			// current.source_branch_id: the branch id that current state passes
-			current.source_branch_id >= e.data.branch_id;
+		
+		if(!current.active) return true; 
+		
+		// always select the longest capture group
+		for(group_id_t group_id = 1; group_id <= nfa.max_capture_id; ++group_id) {
+			if(current.captures.find(group_id) == current.captures.cend()) return true; 
+			if(propagator.captures.find(group_id) == propagator.captures.cend()) return false;
+		}
+		return true;
+
+		// or destination state is not the end of branch structure
+		// e.category != edge_category::branch_end ||
+		// // or cover the context if current id is greater or equals to the propagator's
+		// // e.data.branch_id: the branch id that the propagator passes
+		// // current.source_branch_id: the branch id that current state passes
+		// current.source_branch_id >= e.data.branch_id;
 	}
 
 	// propagate src's state_context to its target state by edges[edge_id]
