@@ -1,20 +1,23 @@
 
+#include <format>
 #include <string>
 #include <utility>
 #include <iterator>
 #include <iostream>
 
-#include "fmt/core.h"
-#include "fmt/ranges.h"
 
 #include "../include/regular_expression.hpp"
 
+template <typename... Args> 
+void print(const char* format, Args&&... args) {
+	std::cout << std::format(format, std::forward<Args>(args)...);
+}
 
 int main(int argc, const char** argv) {
 	using std::cin;
 	using std::string;
 	using std::distance;
-	using namespace fmt;
+	// using namespace fmt;
 	using namespace rais::regex;
 
 	while(true) {
