@@ -113,10 +113,17 @@ constexpr bool in_range(CharT a, CharT b, CharT x) noexcept{ return a <= x && x 
 template <typename CharT>
 constexpr bool in_range(const char_range<CharT>& r, CharT x) noexcept{ return r.is_member(x); }
 
-// so dirty
+
 template <typename CharT>
 constexpr basic_string_view<CharT> make_string_view(const CharT* begin, const CharT* end) noexcept{
+
+#if __cplusplus < 202002L
+	//  so dirty, but we have no choice
 	return begin == end ? basic_string_view<CharT>{} : basic_string_view<CharT>{&*begin, static_cast<size_t>(end - begin)};
+#else 
+	return {begin, end};
+#endif 
+
 }
 
 template <typename CharT>
@@ -154,7 +161,7 @@ enum class oper {
 	
 };
 
-enum edge_category: char {
+enum edge_category: unsigned char {
 	single_char = 1, // range of one char [from]
 	range,           // range: [from-to]
 	spaces,          // space chars: [\f\n\r\t\v]
@@ -164,13 +171,15 @@ enum edge_category: char {
 	all,             // any chars
 	
 	// inverted ranges 
-	invert_single_char = -single_char,  // [^c]
-	invert_range       = -range,        // [^from-to]
-	non_spaces         = -spaces,       // [^\f\n\r\t\v]
-	non_words          = -words,        // [^0-9a-zA-Z_]
-	non_digits         = -digits,       // [^0-9]
-	non_newlines       = -newlines,     // [^\n\r] (wildcard)
-	none               = -all,           // nothing could be accepted
+
+	invert = 0b1000'0000, // inverted categories bitmask
+	invert_single_char = invert | single_char, // [^c]
+	invert_range       = invert | range,       // [^from-to]
+	non_spaces         = invert | spaces,      // [^\f\n\r\t\v]
+	non_words          = invert | words,       // [^0-9a-zA-Z_]
+	non_digits         = invert | digits,      // [^0-9]
+	non_newlines       = invert | newlines,    // [^\n\r] (wildcard)
+	none               = invert | all,         // nothing could be accepted
 
 	
 	// all of the following categories are empty edges 
@@ -314,7 +323,6 @@ struct nfa_builder {
 		// this will be assigned after parsing
 		state_id_t id;
 		
-		constexpr state() noexcept = default;
 		state* add_outgoing(const edge& e) {
 			edges.push_back(e);
 			return this;
@@ -418,7 +426,8 @@ struct nfa_builder {
 		}
 
 		edge& invert() noexcept{
-			category = edge_category(-static_cast<underlying_type_t<edge_category>>(category));
+			// invert the highest bit of category
+			category = edge_category(static_cast<underlying_type_t<edge_category>>(category) ^ edge_category::invert); 
 			return *this;
 		}
 

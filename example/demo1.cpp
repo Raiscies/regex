@@ -9,7 +9,7 @@
 #include "../include/regular_expression.hpp"
 
 template <typename... Args> 
-void print(const char* format, Args&&... args) {
+void print(std::format_string<Args...> format, Args&&... args) {
 	std::cout << std::format(format, std::forward<Args>(args)...);
 }
 
