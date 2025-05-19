@@ -1466,8 +1466,8 @@ struct non_determinstic_finite_automaton {
 				return c == data.single_char;
 			case edge_category::range:       // range: [from-to]
 				return in_range(data.range, c);
-			case edge_category::spaces:      // space chars: [\t\n\v\f\r] == [\x09-\x0d]
-				return in_range('\x09', '\x0d', c);
+			case edge_category::spaces:      // space chars: [\t\n\v\f\r ] == [\x09-\x0d ]
+				return in_range('\x09', '\x0d', c) || c == ' ';
 			case edge_category::words:       // identifier chars(words): [0-9a-zA-Z_]
 				return is_word(c);
 			case edge_category::digits:      // digit chars: [0-9]
@@ -1483,8 +1483,8 @@ struct non_determinstic_finite_automaton {
 				return c != data.single_char;
 			case edge_category::invert_range:       // [^from-to]
 				return !in_range(data.range, c);
-			case edge_category::non_spaces:         // [^\t\n\v\f\r]
-				return !in_range('\x09', '\x0d', c);
+			case edge_category::non_spaces:         // [^\t\n\v\f\r ]
+				return !in_range('\x09', '\x0d', c) && c != ' ';
 			case edge_category::non_words:          // [^0-9a-zA-Z_]
 				return !is_word(c);
 			case edge_category::non_digits:         // [^0-9]
@@ -1812,7 +1812,7 @@ public:
 
 	template <bool shift_capture_pos = true, bool on_current_context = false>
 	void do_epsilon_closure(state_id_t state) {
-		// apply ε-closure to state_contexts
+		// apply ε-closure to state_contexts or next_state_contexts
 		// all of the ε-closure(q) always maintains the same context? 
 		// ε-closure(q) = {q} ∪ {p | p ∈ δ(q, ε) ∪ δ(δ(q, ε), ε) ∪ ...}	
 
@@ -1872,7 +1872,7 @@ public:
 			++context_it;
 			--id;
 		}
-		update_contexts();
+
 		return !trapped;
 	}
 
@@ -1880,13 +1880,13 @@ public:
 		reset(begin, end);
 
 		do_epsilon_closure<false, true>(0);
-		// update_contexts();
 
 		while(pos != end) {
 			if(!step()) {
 				// failed: can't match
 				return {}; 
 			}
+			update_contexts();
 			++pos;
 		}
 
@@ -1907,11 +1907,38 @@ public:
 	}
 
 	capture_result_t search(string_iterator_t& it, string_iterator_t end) {
+
 		while(it != end) {
-			auto result = match(it, end);
-			if(!result.empty()) return result;
-			++it;
+			reset(it, end);
+			do_epsilon_closure<false, true>(0);
+
+			// try the longest match
+			
+			while(pos != end) {
+				if(!step()) break;
+				++pos;
+				update_contexts();
+			}
+			
+			if(!state_contexts[nfa.final_state].active) {
+				// failed: can't match from this position
+				++it;
+				continue;
+			} 
+			
+			// matched
+			capture_result_t result(nfa.max_capture_id + 1);
+			result.front() = make_string_view(it, pos);
+			for(auto [group_id, capture]: state_contexts[nfa.final_state].captures) {
+				result[group_id] = capture.to_string_view();
+			}
+
+			// move it to the next begin
+			it = pos;
+			return result;
+
 		}
+
 		return {};
 	}
 	capture_result_t search(string_view_t s) {

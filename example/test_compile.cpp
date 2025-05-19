@@ -14,10 +14,9 @@ void print(std::format_string<Args...> format, Args&&... args) {
 }
 
 int main(int argc, const char** argv) {
-	using std::cin;
 	using std::string;
 	using std::distance;
-	// using namespace fmt;
+
 	using namespace rais::regex;
 
 	while(true) {
@@ -25,7 +24,7 @@ int main(int argc, const char** argv) {
 		string pattern = "";
 		
 		print("input a pattern:\n");
-		cin >> pattern;
+		std::cin >> pattern;
 
 		print("pattern: {}\n", pattern);
 
@@ -38,7 +37,7 @@ int main(int argc, const char** argv) {
 		while(true) {
 			string target;
 			print("input a target string(input ~ to set a new pattern):\n");
-			cin >> target;
+			std::getline(std::cin, target);
 			if(target == "~") break;
 			auto result = re.match(target);
 			print("target = {}, capture: [", target);
