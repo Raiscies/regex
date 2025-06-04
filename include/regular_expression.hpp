@@ -23,6 +23,7 @@
 		2.3 line begin/end boundary
 */
 
+#include <span>
 #include <list>
 #include <stack>
 #include <queue>
@@ -75,8 +76,12 @@ static constexpr std::string_view error_message(error_category category) noexcep
 }
 
 namespace impl {
-
+	
 using std::swap;
+using std::forward;
+
+using std::is_integral_v;
+
 using std::list;
 using std::tuple;
 using std::queue;
@@ -84,14 +89,12 @@ using std::stack;
 using std::size_t;
 using std::string;
 using std::vector;
-using std::forward;
 using std::optional;
 using std::remove_cv_t;
 using std::string_view;
 using std::basic_string;
 using std::unordered_set;
 using std::unordered_map;
-using std::is_integral_v;
 using std::numeric_limits;
 using std::underlying_type_t;
 using std::basic_string_view;
@@ -116,14 +119,7 @@ constexpr bool in_range(const char_range<CharT>& r, CharT x) noexcept{ return r.
 
 template <typename CharT>
 constexpr basic_string_view<CharT> make_string_view(const CharT* begin, const CharT* end) noexcept{
-
-#if __cplusplus < 202002L
-	//  so dirty, but we have no choice
-	return begin == end ? basic_string_view<CharT>{} : basic_string_view<CharT>{&*begin, static_cast<size_t>(end - begin)};
-#else 
 	return {begin, end};
-#endif 
-
 }
 
 template <typename CharT>
@@ -252,7 +248,6 @@ constexpr bool operator!(const state_flag& flag) noexcept{
 	return static_cast<underlying_type_t<state_flag>>(flag) == 0;
 }
 
-
 template <typename CharT>
 struct non_determinstic_finite_automaton;
 
@@ -291,8 +286,9 @@ struct nfa_builder {
 	
 	using char_t = CharT;
 	using range_t = char_range<char_t>;
-	using string_view_t = basic_string_view<char_t>;
-	using string_iterator_t = typename string_view_t::const_iterator;
+
+	using pattern_view_t = basic_string_view<char_t>;
+	using pattern_iterator_t = typename pattern_view_t::iterator;
 
 	using nfa_t = non_determinstic_finite_automaton<char_t>;
 
@@ -306,7 +302,7 @@ struct nfa_builder {
 
 	constexpr nfa_builder() = default;
 
-	nfa_builder(string_view_t s) {
+	nfa_builder(pattern_view_t s) {
 		parse(s);
 	}
 	
@@ -342,7 +338,8 @@ struct nfa_builder {
 	using state_iterator_t = typename list<state>::iterator;
 	using const_state_iterator_t = typename list<state>::const_iterator;
 
-	// we must implement a hash function for state_iterator_t
+	// iterator is not hashable by default,
+	// so implementing a hash function for state_iterator_t is necessary
 	struct state_iterator_hash {
 		// this function requires it is dereferenceable	
 		constexpr size_t operator()(const state_iterator_t& it) const noexcept{
@@ -353,7 +350,7 @@ struct nfa_builder {
 	state_iterator_t final_state;
 	size_t max_capture_id = 0;
 
-	// internal representation(IR) of NFA edge
+	// internal representation(IR) for NFA edge
 	struct edge {
 		edge_category category;
 		state_iterator_t target; 
@@ -531,7 +528,7 @@ struct nfa_builder {
 
 protected:
 	
-	// we don't directly use stack cause sometimes we need to assess the 2th top element of the stack,
+	// we don't directly use stack cause sometimes we need to assess the second top element of the stack,
 	// but don't want to pop the top, access it and push it back. 
 	struct nfa_stack_t: public stack<subnfa, vector<subnfa>> {
 		using stack_t = stack<subnfa, vector<subnfa>>;
@@ -693,7 +690,7 @@ public:
 		return true;
 	}
 
-	optional<edge> lex_escape(string_iterator_t& pos, const string_iterator_t& end) {
+	optional<edge> lex_escape(pattern_iterator_t& pos, const pattern_iterator_t& end) {
 		/*
 		character escapes::
 		1. control escape
@@ -779,7 +776,7 @@ public:
 
 	}
 
-	tuple<error_category, string_iterator_t> parse(string_view_t s) {
+	tuple<error_category, pattern_iterator_t> parse(pattern_view_t s) {
 		// shunting yard algorithm
 
 		reset();
@@ -940,7 +937,7 @@ public:
 		return true;
 	}
 
-	error_category reduce_left_parenthesis(string_iterator_t& pos, const string_iterator_t& end) {
+	error_category reduce_left_parenthesis(pattern_iterator_t& pos, const pattern_iterator_t& end) {
 		if(nfa_stack.empty()) return error_category::empty_operand;
 		switch(oper_stack.top()) {
 		case oper::lparen: {	
@@ -974,7 +971,7 @@ public:
 		return error_category::success;
 	}
 
-	error_category parse_left_parenthesis(string_iterator_t& pos, const string_iterator_t& end) {
+	error_category parse_left_parenthesis(pattern_iterator_t& pos, const pattern_iterator_t& end) {
 		// assert '(' is comsumed and pos != end
 
 		if(*pos != '?') {
@@ -1005,7 +1002,7 @@ public:
 		return error_category::success;
 	}
 
-	optional<vector<edge>> parse_brackets(string_iterator_t& pos, const string_iterator_t& end) {
+	optional<vector<edge>> parse_brackets(pattern_iterator_t& pos, const pattern_iterator_t& end) {
 		// assume pos is pointing at the first char after the left square bracket '[' and possible invert char '^' 
 
 		vector<edge> edges;
@@ -1344,7 +1341,7 @@ public:
 
 	}
 
-	braces_result parse_braces(string_iterator_t& pos, const string_iterator_t& end) {
+	braces_result parse_braces(pattern_iterator_t& pos, const pattern_iterator_t& end) {
 		// m, n ::= [0-9]+
 		auto lex_digits = [end](auto& p) {
 			size_t n = 0;
@@ -1422,8 +1419,8 @@ struct non_determinstic_finite_automaton {
 	// NFA M = (Q, Σ, δ, q0, f) 
 	using char_t = CharT; // Σ
 	using range_t = char_range<char_t>;
-	using string_view_t = basic_string_view<char_t>;
-	using string_iterator_t = typename string_view_t::iterator;	
+	// using string_view_t = basic_string_view<char_t>;
+	// using string_iterator_t = typename string_view_t::iterator;	
 	
 	using nfa_builder_t = nfa_builder<char_t>;
 
@@ -1603,6 +1600,7 @@ struct regular_expression_engine {
 
 	using char_t = CharT;
 	using string_view_t = basic_string_view<char_t>;
+	
 	using string_iterator_t = typename string_view_t::const_iterator;
 	using nfa_t = non_determinstic_finite_automaton<char_t>;
 
@@ -1907,13 +1905,10 @@ public:
 	}
 
 	capture_result_t search(string_iterator_t& it, string_iterator_t end) {
-
 		while(it != end) {
 			reset(it, end);
 			do_epsilon_closure<false, true>(0);
 
-			// try the longest match
-			
 			while(pos != end) {
 				if(!step()) break;
 				++pos;
@@ -1960,6 +1955,17 @@ public:
 		return search_all(s.begin(), s.end());
 	}
 
+	// // replace the match of pattern count times in target with replacement 
+	// string_iterator_t replace(string_iterator_t begin, string_iterator_t end, string_view_t replacement, size_t count = -1) {
+	// 	auto result = search(begin, end);
+	// 	if(result.empty()) return begin;
+	// 	auto [begin_pos, end_pos] = result.front();
+	// 	auto new_begin = begin;
+	// 	new_begin.replace(begin_pos, end_pos, replacement);
+	// 	return new_begin;
+	// }
+
+
 }; // struct regular_expression_engine
 
 } // namespace impl
@@ -1998,6 +2004,30 @@ std::tuple<error_category, std::vector<typename regular_expression_engine<CharT>
 		builder.generate()
 	}.search_all(target)};
 }
+
+// // replace the first match of pattern in target with replacement
+// template <typename CharT>
+// std::tuple<error_category, @> replace(std::basic_string_view<CharT> pattern, std::basic_string<CharT>& target, std::basic_string_view<CharT> replacement) {
+// 	impl::nfa_builder<CharT> builder{pattern};
+// 	if(auto result = builder.get_result(); result != error_category::success) 
+// 		return {result, {}};
+// 	else {
+// 		auto nfa = builder.generate();
+// 		regular_expression_engine<CharT> engine{nfa};
+// 		auto res = engine.match(target);
+// 		if(res.empty()) return {error_category::no_match, {}};
+// 		else {
+// 			target.replace(res.front().begin(), res.front().end(), replacement);
+// 			return {error_category::success, res};
+// 		}
+// 	}
+// }
+
+// // replace all matches of pattern in target with replacement
+// template <typename CharT>
+// auto replace_all(std::basic_string_view<CharT> pattern, std::basic_string<CharT>& target, std::basic_string_view<CharT> replacement) {
+
+// }
 
 template <typename CharT>
 std::tuple<error_category, impl::non_determinstic_finite_automaton<CharT>> compile(std::basic_string_view<CharT> pattern) {
