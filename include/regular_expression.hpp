@@ -23,7 +23,6 @@
 		2.3 line begin/end boundary
 */
 
-#include <span>
 #include <list>
 #include <stack>
 #include <queue>
@@ -35,6 +34,7 @@
 #include <utility>
 #include <iterator>
 #include <optional>
+#include <concepts>
 #include <algorithm>
 #include <functional>
 #include <string_view>
@@ -79,10 +79,12 @@ namespace impl {
 	
 using std::swap;
 using std::forward;
+using std::as_const;
 
 using std::is_integral_v;
 
 using std::list;
+using std::copy;
 using std::tuple;
 using std::queue;
 using std::stack;
@@ -96,6 +98,7 @@ using std::basic_string;
 using std::unordered_set;
 using std::unordered_map;
 using std::numeric_limits;
+using std::convertible_to;
 using std::underlying_type_t;
 using std::basic_string_view;
 using std::remove_reference_t;
@@ -115,12 +118,6 @@ constexpr bool in_range(CharT a, CharT b, CharT x) noexcept{ return a <= x && x 
 
 template <typename CharT>
 constexpr bool in_range(const char_range<CharT>& r, CharT x) noexcept{ return r.is_member(x); }
-
-
-template <typename CharT>
-constexpr basic_string_view<CharT> make_string_view(const CharT* begin, const CharT* end) noexcept{
-	return {begin, end};
-}
 
 template <typename CharT>
 constexpr int hex_val(CharT x) noexcept{
@@ -1595,19 +1592,45 @@ protected:
 
 }; // struct non_determinstic_finite_automaton
 
+template <typename T>
+struct first_param_of {};
+template <template <typename, typename...> class Te, typename First, typename... Others>
+struct first_param_of<Te<First, Others...>> {
+	using type = First;
+};
+
+template <typename T> requires requires(T t) {
+	typename first_param_of<T>::type;
+}
+using first_param_of_t = typename first_param_of<T>::type;
+
+template <typename T, typename U = first_param_of_t<T>*>
+concept string_view_like = 
+	std::input_iterator<U> &&
+	requires(U begin, U end) {
+		T();
+		T(begin, end);
+		T(as_const(begin), as_const(end));
+	};
+
 template <typename CharT>
 struct regular_expression_engine {
 
 	using char_t = CharT;
+
+	using string_t = basic_string<char_t>;
+	// immutable
 	using string_view_t = basic_string_view<char_t>;
-	
-	using string_iterator_t = typename string_view_t::const_iterator;
+	// mutable
+	using span_t = span<char_t>;
+
+	using pos_t = char_t*;
+	using const_pos_t = const char_t*;
+
 	using nfa_t = non_determinstic_finite_automaton<char_t>;
 
 	using state_id_t = typename nfa_t::state_id_t;
 	using group_id_t = size_t;
-	using capture_result_t = vector<string_view_t>;
-
 
 	// stores the contexts of captures in running nfa
 	// use during runtime
@@ -1617,28 +1640,33 @@ struct regular_expression_engine {
 
 			// capture range: [begin, end)
 			// begin == end represents empty string view ""
-			string_iterator_t begin, end;
+			
+			// hard to use
+			// view_iterator_t begin, end;
+			// using const_pos_t = const char_t*;
+
+			const_pos_t begin, end;
 
 		protected:
 			bool is_completed = false;
 		public:
 
 			constexpr capture() noexcept = default;
-			constexpr capture(string_iterator_t begin) noexcept: begin{begin} {}
+			constexpr capture(const_pos_t begin) noexcept: begin{begin} {}
 			
-			capture& reset(string_iterator_t new_begin) noexcept{
+			capture& reset(const_pos_t new_begin) noexcept{
 				begin = new_begin;
 				is_completed = false;
 				return *this;
 			}
 
-			capture& complete(string_iterator_t pos) noexcept{
+			capture& complete(const_pos_t pos) noexcept{
 				end = pos;
 				is_completed = true;
 				return *this;
 			}
 
-			bool try_complete(string_iterator_t pos) noexcept{
+			bool try_complete(const_pos_t pos) noexcept{
 				if(not is_completed) {
 					 this->end = pos;
 					 return is_completed = true;
@@ -1649,10 +1677,28 @@ struct regular_expression_engine {
 			bool completed() const noexcept{
 				return is_completed;
 			}
+			
+			// // result is immutable
+			// string_view_t to_string_view() const{
+			// 	return is_completed ? string_view_t{begin, end} : string_view_t{};
+			// }
 
-			string_view_t to_string_view() const noexcept{
-				return is_completed ? make_string_view(begin, end) : string_view_t{};
+			// // result is mutable
+			// span_t to_span() {
+			// 	return is_completed ? span_t{const_cast<pos_t>(begin), const_cast<pos_t>(end)} : span_t{};
+			// }
+
+			template <string_view_like T>
+			explicit operator T() {
+				return is_completed ? T(const_cast<pos_t>(begin), const_cast<pos_t>(end)) : T{};
 			}
+			
+			template <string_view_like T>
+			explicit operator T() const {
+				return is_completed ? T(begin, end) : T{};
+			}
+
+
 
 		}; // struct capture
 
@@ -1661,16 +1707,16 @@ struct regular_expression_engine {
 		unordered_map<group_id_t, capture> captures;
 		bool active = false;
 
-		// extra state data
-		union {
-			// active when state category == branch_end
-			size_t source_branch_id;
-		};
+		// // extra state data
+		// union {
+		// 	// active when state category == branch_end
+		// 	size_t source_branch_id;
+		// };
 
 
 		state_context() = default;
 
-		state_context& reset() {
+		state_context& reset() noexcept{
 			captures.clear();
 			active = false;
 			return *this;
@@ -1693,7 +1739,7 @@ protected:
 	vector<state_context> next_state_contexts;
 	unordered_map<state_id_t, unordered_set<group_id_t>> capture_end_states;
 
-	string_iterator_t begin, end, pos;
+	const_pos_t begin, end, current;
 
 public:
 
@@ -1701,29 +1747,31 @@ public:
 		assert(!nfa.states.empty());
 	}
 
-	regular_expression_engine& reset(string_iterator_t new_begin, string_iterator_t new_end) {
+protected:
+
+	regular_expression_engine& reset(const_pos_t new_begin, const_pos_t new_end) noexcept{
 		for(auto& c: state_contexts) c.reset();
 		for(auto& c: next_state_contexts) c.reset();
 		state_contexts.front().active = true;
-		pos = begin = new_begin;
+		current = begin = new_begin;
 		end = new_end;
 		return *this;
 	}
 
-	void update_contexts() {
+	void update_contexts() noexcept{
 		std::swap(state_contexts, next_state_contexts);
 		for(auto& c: next_state_contexts) c.reset();
 	}
 
 	
 	// compare contexts and returns whether we should replace the current context with propagator 
-	constexpr bool needs_cover_context(const state_context& current, const state_context& propagator, const typename nfa_t::edge& e) const noexcept{
+	constexpr bool needs_cover_context(const state_context& target, const state_context& propagator, const typename nfa_t::edge& e) const noexcept{
 		
-		if(!current.active) return true; 
+		if(!target.active) return true; 
 		
 		// always select the longest capture group
 		for(group_id_t group_id = 1; group_id <= nfa.max_capture_id; ++group_id) {
-			if(current.captures.find(group_id) == current.captures.cend()) return true; 
+			if(target.captures.find(group_id) == target.captures.cend()) return true; 
 			if(propagator.captures.find(group_id) == propagator.captures.cend()) return false;
 		}
 		return true;
@@ -1751,7 +1799,7 @@ public:
 		std::advance(dst_context_it, dst);
 		auto& dst_context = *dst_context_it;
 
-		auto capture_pos = pos;
+		auto capture_pos = current;
 
 		if constexpr(shift_capture_pos) ++capture_pos;
 
@@ -1792,7 +1840,7 @@ public:
 				break;
 			}
 			case edge_category::branch_end:
-				dst_context.source_branch_id = e.data.branch_id;
+				// dst_context.source_branch_id = e.data.branch_id;
 				[[fallthrough]];
 			default:
 				// normal edges
@@ -1851,14 +1899,14 @@ public:
 				// conjunction state, all of the edges must be accepted
 				// all of the edges point to the same target state
 				for(const auto& e: state_it->edges) {
-					if(!e.accept(*pos)) goto next_state;
+					if(!e.accept(*current)) goto next_state;
 				}
 				// all of the edges are accepted
 				propagate_context(*context_it, state_it->edges.front());
 				do_epsilon_closure(state_it->edges.front().target);
 				trapped = false;
 			}else {
-				for(const auto& e: state_it->edges) if(e.accept(*pos)) {
+				for(const auto& e: state_it->edges) if(e.accept(*current)) {
 					propagate_context(*context_it, e);
 					do_epsilon_closure(e.target);
 					trapped = false;
@@ -1874,96 +1922,117 @@ public:
 		return !trapped;
 	}
 
-	capture_result_t match(string_iterator_t begin, string_iterator_t end){
+public:
+
+	template <string_view_like T = string_view_t>
+	vector<T> match(const_pos_t begin, const_pos_t end) {
 		reset(begin, end);
 
 		do_epsilon_closure<false, true>(0);
 
-		while(pos != end) {
+		while(current != end) {
 			if(!step()) {
 				// failed: can't match
 				return {}; 
 			}
 			update_contexts();
-			++pos;
+			++current;
 		}
 
 		// failed: can't match
 		if(!state_contexts[nfa.final_state].active) return {};
 
-		capture_result_t result(nfa.max_capture_id + 1);
+		vector<T> result(nfa.max_capture_id + 1);
 		// result[0] is the whole match
-		result.front() = make_string_view(begin, end);
+		result.front() = T(begin, end);
+
 		for(auto [group_id, capture]: state_contexts[nfa.final_state].captures) {
-			result[group_id] = capture.to_string_view();
+			result[group_id] = T{capture};
 		}
 		return result;
 	}
 
-	capture_result_t match(string_view_t s) {
-		return match(s.begin(), s.end());
+	template <string_view_like T = string_view_t>
+	vector<T> match(string_view_t s) {
+		return match(s.data(), s.data() + s.size());
 	}
 
-	capture_result_t search(string_iterator_t& it, string_iterator_t end) {
-		while(it != end) {
-			reset(it, end);
+	template <string_view_like T = string_view_t>
+	vector<T> search(const_pos_t& pos, const_pos_t end) {
+		while(pos != end) {
+			reset(pos, end);
 			do_epsilon_closure<false, true>(0);
 
-			while(pos != end) {
+			while(current != end) {
 				if(!step()) break;
-				++pos;
+				++current;
 				update_contexts();
 			}
 			
 			if(!state_contexts[nfa.final_state].active) {
 				// failed: can't match from this position
-				++it;
+				++pos;
 				continue;
 			} 
 			
 			// matched
-			capture_result_t result(nfa.max_capture_id + 1);
-			result.front() = make_string_view(it, pos);
+			vector<T> result(nfa.max_capture_id + 1);
+			result.front() = T(pos, current);
 			for(auto [group_id, capture]: state_contexts[nfa.final_state].captures) {
-				result[group_id] = capture.to_string_view();
+				result[group_id] = T{capture};
 			}
 
 			// move it to the next begin
-			it = pos;
+			pos = current;
 			return result;
 
 		}
 
 		return {};
 	}
-	capture_result_t search(string_view_t s) {
-		auto it = s.begin();
-		return search(it, s.end());
+
+	template <string_view_like T = string_view_t>
+	vector<T> search(string_view_t s) {
+		auto pos = s.data();
+		return search(pos, pos + s.size());
 	}
 
-	vector<capture_result_t> search_all(string_iterator_t begin, string_iterator_t end) {
-		vector<capture_result_t> results;
-		auto it = begin;
-		while(it != end) {
-			auto result = search(it, end);
-			if(result.empty()) continue;
+	// search all of the matches of pattern in the range [begin, end)
+	template <string_view_like T = string_view_t>
+	vector<vector<T>> search_all(const_pos_t begin, const_pos_t end) {
+		vector<vector<T>> results;
+		auto pos = begin;
+		while(true) {
+			// result will be empty if it == end
+			auto result = search<T>(pos, end); 
+			if(result.empty()) break;
 			results.push_back(result);
 		}
 		return results;
 	}
-	vector<capture_result_t> search_all(string_view_t s) {
-		return search_all(s.begin(), s.end());
+	
+	template <string_view_like T = string_view_t>
+	vector<vector<T>> search_all(string_view_t s) {
+		return search_all<T>(s.data(), s.data() + s.size());
 	}
 
-	// // replace the match of pattern count times in target with replacement 
-	// string_iterator_t replace(string_iterator_t begin, string_iterator_t end, string_view_t replacement, size_t count = -1) {
-	// 	auto result = search(begin, end);
-	// 	if(result.empty()) return begin;
-	// 	auto [begin_pos, end_pos] = result.front();
-	// 	auto new_begin = begin;
-	// 	new_begin.replace(begin_pos, end_pos, replacement);
-	// 	return new_begin;
-	// }
+	// replace the match of pattern for at most 'count' times with replacement 
+	// returns the count of replacements
+	size_t replace(pos_t& pos, const_pos_t end, string_view_t replacement, size_t count = -1) {
+		for(size_t i = 0; i < count; ++i) {
+			auto result = search<pair<pos_t, pos_t>>(pos, end);
+			if(result.empty()) break; // no more matches
+
+			// only replace the first match, witch is the whole match
+			auto& match = result.front();
+			copy(match.first, match.second, replacement.begin());
+		}
+		return i;
+	}
+
+	string_iterator_t replace(string_t& target, string_view_t replacement, size_t count = -1) {
+		return replace(target.data(), target.data() + target.size(), replacement, count);
+	}
 
 
 }; // struct regular_expression_engine
@@ -1973,61 +2042,57 @@ public:
 template <typename CharT>
 using regular_expression_engine = impl::regular_expression_engine<CharT>;
 
-
 // free functions
-template <typename CharT>
-std::tuple<error_category, typename regular_expression_engine<CharT>::capture_result_t> match(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
+template <typename CharT, 
+	impl::string_view_like ViewT = std::basic_string_view<CharT> >
+std::tuple<error_category, std::vector<ViewT>> match(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
 	impl::nfa_builder<CharT> builder{pattern};
-	if(auto result = builder.get_result(); result != error_category::success) 
-		return {result, {}};
-	else return {result, regular_expression_engine<CharT>{
-		builder.generate()
-	}.match(target)};
+	if(auto errc = builder.get_result(); errc != error_category::success) 
+		return {errc, {}};
+	else return {
+		errc, 
+		regular_expression_engine<CharT>{builder.generate()}.match<ResultT>(target)
+	};
+}
+
+template <typename CharT, 
+	impl::string_view_like ViewT = std::basic_string_view<CharT> >
+std::tuple<error_category, std::vector<ViewT>> search(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
+	impl::nfa_builder<CharT> builder{pattern};
+	if(auto errc = builder.get_result(); errc != error_category::success) 
+		return {errc, {}};
+	else return {
+		errc, 
+		regular_expression_engine<CharT>{builder.generate()}.search(target)
+	};
+}
+
+template <typename CharT, 
+	impl::string_view_like ViewT = std::basic_string_view<CharT> >
+std::tuple<error_category, std::vector<std::vector<ViewT>> > search_all(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
+	impl::nfa_builder<CharT> builder{pattern};
+	if(auto errc = builder.get_result(); errc != error_category::success) 
+		return {errc, {}};
+	else return {
+		errc, 
+		regular_expression_engine<CharT>{builder.generate()}.search_all(target)
+	};
 }
 
 template <typename CharT>
-std::tuple<error_category, typename regular_expression_engine<CharT>::capture_result_t> search(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
+std::tuple<error_category, size_t> replace(std::basic_string_view<CharT> pattern, std::basic_string<CharT>& target, std::basic_string_view<CharT> replacement, size_t count = -1) {
 	impl::nfa_builder<CharT> builder{pattern};
-	if(auto result = builder.get_result(); result != error_category::success) 
-		return {result, {}};
-	else return {result, regular_expression_engine<CharT>{
-		builder.generate()
-	}.search(target)};
+	if(auto errc = builder.get_result(); errc != error_category::success) 
+		return {errc, {}};
+	else return {
+		errc, 
+		regular_expression_engine<CharT>{builder.generate()}.replace(
+			target, 
+			replacement, 
+			count
+		)
+	};
 }
-
-template <typename CharT>
-std::tuple<error_category, std::vector<typename regular_expression_engine<CharT>::capture_result_t>> search_all(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
-	impl::nfa_builder<CharT> builder{pattern};
-	if(auto result = builder.get_result(); result != error_category::success) 
-		return {result, {}};
-	else return {result, regular_expression_engine<CharT>{
-		builder.generate()
-	}.search_all(target)};
-}
-
-// // replace the first match of pattern in target with replacement
-// template <typename CharT>
-// std::tuple<error_category, @> replace(std::basic_string_view<CharT> pattern, std::basic_string<CharT>& target, std::basic_string_view<CharT> replacement) {
-// 	impl::nfa_builder<CharT> builder{pattern};
-// 	if(auto result = builder.get_result(); result != error_category::success) 
-// 		return {result, {}};
-// 	else {
-// 		auto nfa = builder.generate();
-// 		regular_expression_engine<CharT> engine{nfa};
-// 		auto res = engine.match(target);
-// 		if(res.empty()) return {error_category::no_match, {}};
-// 		else {
-// 			target.replace(res.front().begin(), res.front().end(), replacement);
-// 			return {error_category::success, res};
-// 		}
-// 	}
-// }
-
-// // replace all matches of pattern in target with replacement
-// template <typename CharT>
-// auto replace_all(std::basic_string_view<CharT> pattern, std::basic_string<CharT>& target, std::basic_string_view<CharT> replacement) {
-
-// }
 
 template <typename CharT>
 std::tuple<error_category, impl::non_determinstic_finite_automaton<CharT>> compile(std::basic_string_view<CharT> pattern) {
