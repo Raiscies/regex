@@ -1,17 +1,5 @@
 
-#include <format>
-#include <string>
-#include <utility>
-#include <limits>
-#include <iostream>
-#include <string_view>
-
-#include "../include/regular_expression.hpp"
-
-template <typename... Args>
-void print(std::format_string<Args...> format, Args&&... args) {
-    std::cout << std::format(format, std::forward<Args>(args)...);
-} 
+#include "./common.hpp"
 
 int main(int argc, const char** argv) {
     using std::string;
@@ -21,21 +9,21 @@ int main(int argc, const char** argv) {
     while(true) {
         string pattern;
         string target;
-        print("input a pattern:\n");
+        println("input a pattern:");
         std::cin >> pattern;
         std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-        print("input a target string:\n");
+        println("input a target string:");
         std::getline(std::cin, target);
 
-        print("pattern: {}\n", pattern);
-        print("target: {}\n", target);
+        println("pattern: {}", pattern);
+        println("target: {}", target);
 
         auto [errc, result] = search<char>(pattern, target);
         if (errc != error_category::success) {
-            print("error: {}\n", error_message(errc));
+            println("error: {}", error_message(errc));
             continue;
         }
-        print("pattern result: {}\n", error_message(errc));
+        println("pattern result: {}", error_message(errc));
         size_t i = 0;
         for(const auto& m: result) {
             if(m.empty()) {
@@ -46,7 +34,7 @@ int main(int argc, const char** argv) {
             }
             if(++i < result.size()) print(", ");
         }
-        print("\n");
+        println("");
 
     }
 }

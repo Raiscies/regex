@@ -1,17 +1,5 @@
 
-#include <format>
-#include <string>
-#include <utility>
-#include <iterator>
-#include <iostream>
-
-
-#include "../include/regular_expression.hpp"
-
-template <typename... Args> 
-void print(std::format_string<Args...> format, Args&&... args) {
-	std::cout << std::format(format, std::forward<Args>(args)...);
-}
+#include "./common.hpp"
 
 int main(int argc, const char** argv) {
 	using std::string;
@@ -23,20 +11,20 @@ int main(int argc, const char** argv) {
 		
 		string pattern = "";
 		
-		print("input a pattern:\n");
+		println("input a pattern:");
 		std::cin >> pattern;
 
-		print("pattern: {}\n", pattern);
+		println("pattern: {}", pattern);
 
 		auto [result, nfa] = compile<char>(pattern);
 
-		print("pattern result: {}\n", error_message(result));
+		println("pattern result: {}", error_message(result));
 		
 		if(result != error_category::success) continue;
 		regular_expression_engine<char> re{nfa};
 		while(true) {
 			string target;
-			print("input a target string(input ~ to set a new pattern):\n");
+			println("input a target string(input ~ to set a new pattern):");
 			std::getline(std::cin, target);
 			if(target == "~") break;
 			auto result = re.match(target);
@@ -51,7 +39,7 @@ int main(int argc, const char** argv) {
 				}
 				if(++i < result.size()) print(", ");
 			}
-			print("]\n");
+			println("]");
 		}
 	}
 
