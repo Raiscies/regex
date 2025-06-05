@@ -22,17 +22,17 @@ Free functions are available:
 using namespace rais::regex;
 
 // Match the whole target with the pattern:
-auto [errc, match] = regex::match("target", "pattern");
+auto [errc, match] = match("target", "pattern");
 
 // Search for the first occurrence of the pattern in the target:
-auto [errc, match] = regex::search("target", "pattern");
+auto [errc, match] = search("target", "pattern");
 
 // Search for all occurrences of the pattern in the target:
-auto [errc, matches] = regex::search_all("target", "pattern");
+auto [errc, matches] = search_all("target", "pattern");
 
 // Replace the specified count (default is unlimited) of matches of the pattern in the target:
 std::string target = "target";
-auto [errc, replaced_count] = regex::replace(target, "pattern", "replacement" /*, replace-count */);
+auto [errc, replaced_count] = replace(target, "pattern", "replacement" /*, replace-count */);
 
 /*
     where the type of 
