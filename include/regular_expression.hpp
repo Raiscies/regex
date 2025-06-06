@@ -77,13 +77,13 @@ static constexpr std::string_view error_message(error_category category) noexcep
 
 namespace impl {
 	
+// functions
 using std::copy;
 using std::swap;
 using std::forward;
 using std::as_const;
 
-using std::is_integral_v;
-
+// classes / aliases
 using std::pair;
 using std::list;
 using std::tuple;
@@ -99,10 +99,15 @@ using std::basic_string;
 using std::unordered_set;
 using std::unordered_map;
 using std::numeric_limits;
-using std::convertible_to;
-using std::underlying_type_t;
 using std::basic_string_view;
+using std::underlying_type_t;
 using std::remove_reference_t;
+
+// concepts
+using std::same_as;
+using std::convertible_to;
+using std::constructible_from;
+using std::default_initializable;
 
 template <typename CharT>
 struct char_range {
@@ -241,7 +246,7 @@ constexpr state_flag& operator^=(state_flag& lhs, const state_flag& rhs) noexcep
 	return lhs = lhs ^ rhs;
 }
 
-template <typename T>
+template <typename ResultViewT>
 constexpr bool operator!(const state_flag& flag) noexcept{
 	return static_cast<underlying_type_t<state_flag>>(flag) == 0;
 }
@@ -1593,27 +1598,6 @@ protected:
 
 }; // struct non_determinstic_finite_automaton
 
-// template <typename T>
-// struct first_param_of {};
-// template <template <typename, typename...> class Te, typename First, typename... Others>
-// struct first_param_of<Te<First, Others...>> {
-// 	using type = First;
-// };
-
-// template <typename T> requires requires(T t) {
-// 	typename first_param_of<T>::type;
-// }
-// using first_param_of_t = typename first_param_of<T>::type;
-
-template <typename T, typename U>
-concept string_view_like = 
-	std::input_iterator<U> &&
-	requires(U begin, U end) {
-		T();
-		T(begin, end);
-		T(as_const(begin), as_const(end));
-	};
-
 template <typename CharT>
 struct regular_expression_engine {
 
@@ -1676,17 +1660,18 @@ struct regular_expression_engine {
 			bool completed() const noexcept{
 				return is_completed;
 			}
-			
-			template <string_view_like T>
-			explicit operator T() {
-				return is_completed ? T(const_cast<pos_t>(begin), const_cast<pos_t>(end)) : T{};
-			}
-			
-			template <string_view_like T>
-			explicit operator T() const {
-				return is_completed ? T(begin, end) : T{};
-			}
 
+			template <default_initializable ResultViewT>
+			requires constructible_from<ResultViewT, pos_t, pos_t>
+			explicit operator ResultViewT() {
+				return is_completed ? ResultViewT{const_cast<pos_t>(begin), const_cast<pos_t>(end)} : ResultViewT{};
+			}
+			
+			template <default_initializable ResultViewT>
+			requires constructible_from<ResultViewT, const_pos_t, const_pos_t>
+			explicit operator ResultViewT() const {
+				return is_completed ? ResultViewT{begin, end} : ResultViewT{};
+			}
 
 
 		}; // struct capture
@@ -1880,7 +1865,7 @@ protected:
 		bool trapped = true;
 		auto state_it = nfa.states.rbegin();
 		auto context_it = state_contexts.rbegin();
-		auto id = state_contexts.size() - 1;
+		// auto id = state_contexts.size() - 1;
 		while(state_it != nfa.states.rend()) {
 			if(!context_it->active) goto next_state; 
 
@@ -1905,16 +1890,24 @@ protected:
 			next_state:
 			++state_it;
 			++context_it;
-			--id;
+			// --id;
 		}
 
 		return !trapped;
 	}
 
+	// void replace_impl(pos_t begin, pos_t end, vector<pair<pos_t, pos_t>>& holes, string_view_t replacement, size_t count) {
+		
+	// }
+
 public:
 
-	template <string_view_like T = string_view_t>
-	vector<T> match(const_pos_t begin, const_pos_t end) {
+	// match
+	template <default_initializable ResultViewT = string_view_t, typename PosT> 
+	requires 
+		(convertible_to<PosT, pos_t> && constructible_from<ResultViewT, pos_t, pos_t>) ||
+		(convertible_to<PosT, const_pos_t> && constructible_from<ResultViewT, const_pos_t, const_pos_t>)
+	vector<ResultViewT> match(PosT begin, PosT end) {
 		reset(begin, end);
 
 		do_epsilon_closure<false, true>(0);
@@ -1931,23 +1924,33 @@ public:
 		// failed: can't match
 		if(!state_contexts[nfa.final_state].active) return {};
 
-		vector<T> result(nfa.max_capture_id + 1);
+		vector<ResultViewT> result(nfa.max_capture_id + 1);
 		// result[0] is the whole match
-		result.front() = T(begin, end);
+		result.front() = ResultViewT{begin, end};
 
 		for(auto [group_id, capture]: state_contexts[nfa.final_state].captures) {
-			result[group_id] = T{capture};
+			result[group_id] = ResultViewT{capture};
 		}
 		return result;
 	}
 
-	template <string_view_like T = string_view_t>
-	vector<T> match(string_view_t s) {
-		return match(s.data(), s.data() + s.size());
+	template <typename ResultViewT = string_view_t, typename StringViewLikeT>
+	requires requires(StringViewLikeT s) {
+		{ s.size() } -> convertible_to<size_t>;
+		requires 
+			convertible_to<decltype(s.data() + s.size()), pos_t> || 
+			convertible_to<decltype(s.data() + s.size()), const_pos_t>; 
+	}
+	vector<ResultViewT> match(StringViewLikeT s) {
+		return match<ResultViewT>(s.data(), s.data() + s.size());
 	}
 
-	template <string_view_like T = string_view_t>
-	vector<T> search(const_pos_t& pos, const_pos_t end) {
+	// search
+	template <default_initializable ResultViewT = string_view_t, typename PosT>
+	requires 
+		(convertible_to<PosT, pos_t> && constructible_from<ResultViewT, pos_t, pos_t>) ||
+		(convertible_to<PosT, const_pos_t> && constructible_from<ResultViewT, const_pos_t, const_pos_t>)
+	vector<ResultViewT> search(PosT& pos, const_pos_t end) {
 		while(pos != end) {
 			reset(pos, end);
 			do_epsilon_closure<false, true>(0);
@@ -1965,14 +1968,15 @@ public:
 			} 
 			
 			// matched
-			vector<T> result(nfa.max_capture_id + 1);
-			result.front() = T(pos, current);
+			vector<ResultViewT> result(nfa.max_capture_id + 1);
+			// current is const_pos_t, but the input PosT probaly be non-const
+			result.front() = ResultViewT{pos, const_cast<PosT>(current)};
 			for(auto [group_id, capture]: state_contexts[nfa.final_state].captures) {
-				result[group_id] = T{capture};
+				result[group_id] = ResultViewT{capture};
 			}
 
 			// move it to the next begin
-			pos = current;
+			pos = const_cast<PosT>(current);
 			return result;
 
 		}
@@ -1980,32 +1984,47 @@ public:
 		return {};
 	}
 
-	template <string_view_like T = string_view_t>
-	vector<T> search(string_view_t s) {
+	template <typename ResultViewT = string_view_t, typename StringViewLikeT>
+	requires requires(StringViewLikeT s) {
+		{ s.size() } -> convertible_to<size_t>;
+		requires 
+			convertible_to<decltype(s.data() + s.size()), pos_t> || 
+			convertible_to<decltype(s.data() + s.size()), const_pos_t>; 
+	}
+	vector<ResultViewT> search(StringViewLikeT s) {
 		auto pos = s.data();
-		return search(pos, pos + s.size());
+		return search<ResultViewT>(pos, pos + s.size());
 	}
 
-	// search all of the matches of pattern in the range [begin, end)
-	template <string_view_like T = string_view_t>
-	vector<vector<T>> search_all(const_pos_t begin, const_pos_t end) {
-		vector<vector<T>> results;
+	// search all: of the matches of pattern in the range [begin, end)
+	template <default_initializable ResultViewT = string_view_t, typename PosT>
+	requires 
+		(convertible_to<PosT, pos_t> && constructible_from<ResultViewT, pos_t, pos_t>) ||
+		(convertible_to<PosT, const_pos_t> && constructible_from<ResultViewT, const_pos_t, const_pos_t>)
+	vector<vector<ResultViewT>> search_all(const_pos_t begin, const_pos_t end) {
+		vector<vector<ResultViewT>> results;
 		auto pos = begin;
 		while(true) {
 			// result will be empty if it == end
-			auto result = search<T>(pos, end); 
+			auto result = search<ResultViewT>(pos, end); 
 			if(result.empty()) break;
 			results.push_back(result);
 		}
 		return results;
 	}
 	
-	template <string_view_like T = string_view_t>
-	vector<vector<T>> search_all(string_view_t s) {
-		return search_all<T>(s.data(), s.data() + s.size());
+	template <typename ResultViewT = string_view_t, typename StringViewLikeT>
+	requires requires(StringViewLikeT s) {
+		{ s.size() } -> convertible_to<size_t>;
+		requires 
+			convertible_to<decltype(s.data() + s.size()), pos_t> || 
+			convertible_to<decltype(s.data() + s.size()), const_pos_t>; 
 	}
-
-	// replace the match of pattern for at most 'count' times with replacement 
+	vector<vector<ResultViewT>> search_all(StringViewLikeT s) {
+		return search_all<ResultViewT>(s.data(), s.data() + s.size());
+	}
+		
+	// replace: the match of pattern for at most 'count' times with replacement 
 	// returns the count of replacements
 	size_t replace(pos_t& pos, const_pos_t end, string_view_t replacement, size_t count = -1) {
 		size_t i = 0;
@@ -2015,7 +2034,9 @@ public:
 
 			// only replace the first match, witch is the whole match
 			auto& match = result.front();
-			copy(match.first, match.second, replacement.begin());
+
+			// FIXME: incorrect replacement when the replacement's length is not equal to match's length
+			copy(replacement.cbegin(), replacement.cend(), match.first);
 		}
 		return i;
 	}
@@ -2034,39 +2055,39 @@ template <typename CharT>
 using regular_expression_engine = impl::regular_expression_engine<CharT>;
 
 // free functions
-template <typename CharT, 
-	impl::string_view_like ViewT = std::basic_string_view<CharT> >
-std::tuple<error_category, std::vector<ViewT>> match(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
+template <typename CharT, typename ResultViewT = std::basic_string_view<CharT> >
+// requires std::constructible_from<ResultViewT, const CharT*, const CharT*>
+std::tuple<error_category, std::vector<ResultViewT>> match(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
 	impl::nfa_builder<CharT> builder{pattern};
 	if(auto errc = builder.get_result(); errc != error_category::success) 
-		return {errc, {}};
+	return {errc, {}};
 	else return {
 		errc, 
-		regular_expression_engine<CharT>{builder.generate()}.template match<ViewT>(target)
+		regular_expression_engine<CharT>{builder.generate()}.template match<ResultViewT>(target)
 	};
 }
 
-template <typename CharT, 
-	impl::string_view_like ViewT = std::basic_string_view<CharT> >
-std::tuple<error_category, std::vector<ViewT>> search(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
+template <typename CharT, typename ResultViewT = std::basic_string_view<CharT> >
+// requires std::constructible_from<ResultViewT, const CharT*, const CharT*>
+std::tuple<error_category, std::vector<ResultViewT>> search(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
 	impl::nfa_builder<CharT> builder{pattern};
 	if(auto errc = builder.get_result(); errc != error_category::success) 
 		return {errc, {}};
 	else return {
 		errc, 
-		regular_expression_engine<CharT>{builder.generate()}.template search<ViewT>(target)
+		regular_expression_engine<CharT>{builder.generate()}.template search<ResultViewT>(target)
 	};
 }
 
-template <typename CharT, 
-	impl::string_view_like ViewT = std::basic_string_view<CharT> >
-std::tuple<error_category, std::vector<std::vector<ViewT>> > search_all(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
+template <typename CharT, typename ResultViewT = std::basic_string_view<CharT> >
+// requires std::constructible_from<ResultViewT, const CharT*, const CharT*>
+std::tuple<error_category, std::vector<std::vector<ResultViewT>> > search_all(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
 	impl::nfa_builder<CharT> builder{pattern};
 	if(auto errc = builder.get_result(); errc != error_category::success) 
 		return {errc, {}};
 	else return {
 		errc, 
-		regular_expression_engine<CharT>{builder.generate()}.template search_all<ViewT>(target)
+		regular_expression_engine<CharT>{builder.generate()}.template search_all<ResultViewT>(target)
 	};
 }
 
