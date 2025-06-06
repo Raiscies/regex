@@ -26,6 +26,10 @@ int main(int argc, const char** argv) {
         println("pattern result: {}", error_message(errc));
 
         size_t r = 1;
+        if(results.empty()) {
+            println("no match found.");
+            continue;
+        }
         for(const auto& result: results) {
             size_t i = 0;
             println("{}. ", r);

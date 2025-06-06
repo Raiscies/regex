@@ -20,7 +20,7 @@ int main(int argc, const char** argv) {
         std::cin >> replacement;
         std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
         
-        println("input a target string:");
+         println("input a target string:");
         std::getline(std::cin, target);
 
         println("pattern: \"{}\" -> replacement: \"{}\"", pattern, replacement);

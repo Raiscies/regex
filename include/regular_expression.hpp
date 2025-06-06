@@ -77,14 +77,15 @@ static constexpr std::string_view error_message(error_category category) noexcep
 
 namespace impl {
 	
+using std::copy;
 using std::swap;
 using std::forward;
 using std::as_const;
 
 using std::is_integral_v;
 
+using std::pair;
 using std::list;
-using std::copy;
 using std::tuple;
 using std::queue;
 using std::stack;
@@ -1592,19 +1593,19 @@ protected:
 
 }; // struct non_determinstic_finite_automaton
 
-template <typename T>
-struct first_param_of {};
-template <template <typename, typename...> class Te, typename First, typename... Others>
-struct first_param_of<Te<First, Others...>> {
-	using type = First;
-};
+// template <typename T>
+// struct first_param_of {};
+// template <template <typename, typename...> class Te, typename First, typename... Others>
+// struct first_param_of<Te<First, Others...>> {
+// 	using type = First;
+// };
 
-template <typename T> requires requires(T t) {
-	typename first_param_of<T>::type;
-}
-using first_param_of_t = typename first_param_of<T>::type;
+// template <typename T> requires requires(T t) {
+// 	typename first_param_of<T>::type;
+// }
+// using first_param_of_t = typename first_param_of<T>::type;
 
-template <typename T, typename U = first_param_of_t<T>*>
+template <typename T, typename U>
 concept string_view_like = 
 	std::input_iterator<U> &&
 	requires(U begin, U end) {
@@ -1622,8 +1623,6 @@ struct regular_expression_engine {
 	// immutable
 	using string_view_t = basic_string_view<char_t>;
 	// mutable
-	using span_t = span<char_t>;
-
 	using pos_t = char_t*;
 	using const_pos_t = const char_t*;
 
@@ -1678,16 +1677,6 @@ struct regular_expression_engine {
 				return is_completed;
 			}
 			
-			// // result is immutable
-			// string_view_t to_string_view() const{
-			// 	return is_completed ? string_view_t{begin, end} : string_view_t{};
-			// }
-
-			// // result is mutable
-			// span_t to_span() {
-			// 	return is_completed ? span_t{const_cast<pos_t>(begin), const_cast<pos_t>(end)} : span_t{};
-			// }
-
 			template <string_view_like T>
 			explicit operator T() {
 				return is_completed ? T(const_cast<pos_t>(begin), const_cast<pos_t>(end)) : T{};
@@ -2019,7 +2008,8 @@ public:
 	// replace the match of pattern for at most 'count' times with replacement 
 	// returns the count of replacements
 	size_t replace(pos_t& pos, const_pos_t end, string_view_t replacement, size_t count = -1) {
-		for(size_t i = 0; i < count; ++i) {
+		size_t i = 0;
+		for(; i < count; ++i) {
 			auto result = search<pair<pos_t, pos_t>>(pos, end);
 			if(result.empty()) break; // no more matches
 
@@ -2030,8 +2020,9 @@ public:
 		return i;
 	}
 
-	string_iterator_t replace(string_t& target, string_view_t replacement, size_t count = -1) {
-		return replace(target.data(), target.data() + target.size(), replacement, count);
+	size_t replace(string_t& target, string_view_t replacement, size_t count = -1) {
+		auto pos = target.data();
+		return replace(pos, pos + target.size(), replacement, count);
 	}
 
 
@@ -2051,7 +2042,7 @@ std::tuple<error_category, std::vector<ViewT>> match(std::basic_string_view<Char
 		return {errc, {}};
 	else return {
 		errc, 
-		regular_expression_engine<CharT>{builder.generate()}.match<ResultT>(target)
+		regular_expression_engine<CharT>{builder.generate()}.template match<ViewT>(target)
 	};
 }
 
@@ -2063,7 +2054,7 @@ std::tuple<error_category, std::vector<ViewT>> search(std::basic_string_view<Cha
 		return {errc, {}};
 	else return {
 		errc, 
-		regular_expression_engine<CharT>{builder.generate()}.search(target)
+		regular_expression_engine<CharT>{builder.generate()}.template search<ViewT>(target)
 	};
 }
 
@@ -2075,7 +2066,7 @@ std::tuple<error_category, std::vector<std::vector<ViewT>> > search_all(std::bas
 		return {errc, {}};
 	else return {
 		errc, 
-		regular_expression_engine<CharT>{builder.generate()}.search_all(target)
+		regular_expression_engine<CharT>{builder.generate()}.template search_all<ViewT>(target)
 	};
 }
 
