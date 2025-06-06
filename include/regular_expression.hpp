@@ -2056,7 +2056,6 @@ using regular_expression_engine = impl::regular_expression_engine<CharT>;
 
 // free functions
 template <typename CharT, typename ResultViewT = std::basic_string_view<CharT> >
-// requires std::constructible_from<ResultViewT, const CharT*, const CharT*>
 std::tuple<error_category, std::vector<ResultViewT>> match(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
 	impl::nfa_builder<CharT> builder{pattern};
 	if(auto errc = builder.get_result(); errc != error_category::success) 
@@ -2068,7 +2067,6 @@ std::tuple<error_category, std::vector<ResultViewT>> match(std::basic_string_vie
 }
 
 template <typename CharT, typename ResultViewT = std::basic_string_view<CharT> >
-// requires std::constructible_from<ResultViewT, const CharT*, const CharT*>
 std::tuple<error_category, std::vector<ResultViewT>> search(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
 	impl::nfa_builder<CharT> builder{pattern};
 	if(auto errc = builder.get_result(); errc != error_category::success) 
@@ -2080,7 +2078,6 @@ std::tuple<error_category, std::vector<ResultViewT>> search(std::basic_string_vi
 }
 
 template <typename CharT, typename ResultViewT = std::basic_string_view<CharT> >
-// requires std::constructible_from<ResultViewT, const CharT*, const CharT*>
 std::tuple<error_category, std::vector<std::vector<ResultViewT>> > search_all(std::basic_string_view<CharT> pattern, std::basic_string_view<CharT> target) {
 	impl::nfa_builder<CharT> builder{pattern};
 	if(auto errc = builder.get_result(); errc != error_category::success) 
