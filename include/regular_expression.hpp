@@ -32,6 +32,7 @@
 #include <cstddef>
 #include <cassert>
 #include <utility>
+#include <numeric>
 #include <iterator>
 #include <optional>
 #include <concepts>
@@ -700,7 +701,7 @@ public:
 		2. c + control letter
 		3. x + hex escape sequence
 		4. identity escape
-		// unsupported yet. 5. u + unicode escape sequence
+		!5. unsupported yet. u + unicode escape sequence
 
 			control escape:
 				f: U+000C, page-feed
@@ -1030,7 +1031,7 @@ public:
 						edges.emplace_back(edge_category::single_char, '-');
 						state = parse_char;
 					}else {
-						if(!edges.back().category == edge_category::single_char) 
+						if(edges.back().category != edge_category::single_char) 
 							return { std::nullopt }; // bad char range like [\w-...]
 						
 						state = parse_range;
@@ -1049,7 +1050,7 @@ public:
 				switch(*pos) {
 				case '\\': 
 					if(auto lex_res = lex_escape(++pos, end); lex_res.has_value()) {
-						if(!lex_res.value().category == edge_category::single_char) 
+						if(lex_res.value().category != edge_category::single_char) 
 							return {}; // bad char range like: [c-\w]
 						
 						auto to = lex_res.value().data.single_char;
@@ -1221,7 +1222,7 @@ public:
 		
 		auto unroll_fixed_brace_expression = 
 			[this, begin_state](size_t copy_count, bool remove_capture = true) {
- 
+
 			auto& nfa = nfa_stack.top();
 			assert(copy_count >= 1);
 			auto [first_begin_edge, current_end_state, _] = copy_before(nfa, begin_state, remove_capture);
@@ -1252,8 +1253,6 @@ public:
 				
 				// (R){m,n} == R{m}(R){0,n-m}
 				// (R){m,n} == R{m-1}(R)(R){0,n-m}
-				
-				// TODO: too many branches, need to be optimized
 				
 				if(m == 0) {
 					auto post_end_state = new_state();
@@ -1651,8 +1650,8 @@ struct regular_expression_engine {
 
 			bool try_complete(const_pos_t pos) noexcept{
 				if(not is_completed) {
-					 this->end = pos;
-					 return is_completed = true;
+					this->end = pos;
+					return is_completed = true;
 				}
 				return false;
 			}
@@ -2001,12 +2000,12 @@ public:
 	requires 
 		(convertible_to<PosT, pos_t> && constructible_from<ResultViewT, pos_t, pos_t>) ||
 		(convertible_to<PosT, const_pos_t> && constructible_from<ResultViewT, const_pos_t, const_pos_t>)
-	vector<vector<ResultViewT>> search_all(const_pos_t begin, const_pos_t end) {
+	vector<vector<ResultViewT>> search_all(PosT begin, const_pos_t end) {
 		vector<vector<ResultViewT>> results;
 		auto pos = begin;
 		while(true) {
 			// result will be empty if it == end
-			auto result = search<ResultViewT>(pos, end); 
+			auto result = search<ResultViewT, PosT>(pos, end); 
 			if(result.empty()) break;
 			results.push_back(result);
 		}
@@ -2024,27 +2023,63 @@ public:
 		return search_all<ResultViewT>(s.data(), s.data() + s.size());
 	}
 		
+	// this method has no proper implement semantics, 
+	// cuz the length of input string not necessary equals to output
+	// size_t replace(pos_t& start, const_pos_t end, string_view_t replacement, size_t count = -1);
+
 	// replace: the match of pattern for at most 'count' times with replacement 
-	// returns the count of replacements
-	size_t replace(pos_t& pos, const_pos_t end, string_view_t replacement, size_t count = -1) {
-		size_t i = 0;
-		for(; i < count; ++i) {
-			auto result = search<pair<pos_t, pos_t>>(pos, end);
-			if(result.empty()) break; // no more matches
-
-			// only replace the first match, witch is the whole match
-			auto& match = result.front();
-
-			// FIXME: incorrect replacement when the replacement's length is not equal to match's length
-			copy(replacement.cbegin(), replacement.cend(), match.first);
-		}
-		return i;
-	}
-
+	// returns the real count of replacements
 	size_t replace(string_t& target, string_view_t replacement, size_t count = -1) {
-		auto pos = target.data();
-		return replace(pos, pos + target.size(), replacement, count);
+		auto pos = target.data(), 
+			 end = target.data() + target.size();
+
+		const vector<vector<std::pair<pos_t, pos_t>>>& captured_groups 
+			= search_all<std::pair<pos_t, pos_t>>(pos, end);
+
+		count = std::min(count, captured_groups.size());
+		if(count == 0) return 0;
+		
+		// accumulate length_of_view(targets[i][0]) from i = 0 to (exect_replace_count - 1) 
+		size_t captured_len = 0;
+		for(auto it = captured_groups.cbegin(); it != std::next(captured_groups.cbegin(), count); ++it) {
+			captured_len += length_of_view(it->operator[](0));
+		}
+
+		size_t final_len = 
+			std::distance(pos, end) +    // original length
+			replacement.size() * count - // total length of replacements
+			captured_len;                // total length of strings being replaced
+
+		string_t buf;
+		buf.resize(final_len);
+
+		auto reached_group_it = captured_groups.cbegin();
+		auto buf_it = buf.begin();
+		while(reached_group_it != std::next(captured_groups.cbegin(), count)) {
+			auto [from, to] = reached_group_it->operator[](0);
+			// copy non-captured chars as if.
+			buf_it = std::copy<const_pos_t>(pos, from, buf_it);
+			// replace captured chars with replacement
+			buf_it = std::copy(replacement.cbegin(), replacement.cend(), buf_it);
+			// jump pos 
+			pos = to;
+			++reached_group_it;
+		}
+		// copy tailing chars
+		std::copy<const_pos_t>(pos, end, buf_it);
+		
+		std::swap(target, buf);
+
+		return count;
 	}
+
+protected:
+	
+	template <typename ViewT>
+	static constexpr size_t length_of_view(const ViewT& v) noexcept{
+		const auto& [a, b] = v;
+		return b - a;
+	} 
 
 
 }; // struct regular_expression_engine
