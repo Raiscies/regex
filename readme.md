@@ -32,14 +32,14 @@ auto [errc, matches] = search_all("target", "pattern");
 
 // Replace the specified count (default is unlimited) of matches of the pattern in the target:
 std::string target = "target";
-auto [errc, replaced_count] = replace(target, "pattern", "replacement" /*, replace-count */);
+auto [errc, replaced_count] = replace(target, "pattern", "replacement" /*, maximum-replace-count */);
 
 /*
     where the type of 
         errc is rais::regex::error_category;
         match is std::vector<string_view_like>;
         matches is std::vector<std::vector<string_view_like>>;
-        replaced_count is std::size_t
+        maximum-replace-count is std::size_t
 */ 
 ```
 

@@ -9,6 +9,7 @@ int main(int argc, const char** argv) {
     
     while(true) {
         string pattern;
+        size_t count;
         string replacement;
         string target;
 
@@ -20,13 +21,17 @@ int main(int argc, const char** argv) {
         std::cin >> replacement;
         std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
         
+        println("input the maximum replace count:");
+        std::cin >> count;
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        
         println("input a target string:");
         std::getline(std::cin, target);
 
         println("pattern: \"{}\" -> replacement: \"{}\"", pattern, replacement);
         println("target: {}", target);
 
-        auto [errc, result] = replace<char>(pattern, target, replacement);
+        auto [errc, result] = replace<char>(pattern, target, replacement, count);
         if (errc != error_category::success) {
             println("error: {}", error_message(errc));
             continue;

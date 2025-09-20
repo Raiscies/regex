@@ -16,7 +16,8 @@
 	braces            {m} {m,} {m,n}
 
 	TODO: 
-	1. true capture selection of alternative operator
+	implemented a posix-style capture selection.
+	// 1. true capture selection of alternative operator
 	2. assertion:
 		2.1 zero-width positive/negative lookahead
 		2.2 word/non-word boundary
@@ -727,7 +728,7 @@ public:
 				s: space
 				S: non-space
 				w: letter, digit or '_'
-				W: different from letter, digit or '_' 
+				W: different from letter, digit and '_' 
 	
 		*/
 		assert(pos != end);
@@ -1894,10 +1895,6 @@ protected:
 
 		return !trapped;
 	}
-
-	// void replace_impl(pos_t begin, pos_t end, vector<pair<pos_t, pos_t>>& holes, string_view_t replacement, size_t count) {
-		
-	// }
 
 public:
 
