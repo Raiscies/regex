@@ -4,7 +4,7 @@
 	Regular Expression Interpreter by Raiscies.
 	
 	Supported Grammer:
-	concat
+	concatenation
 	alternative       | 
 	marking grouping   ()
 	non-marking grouping (?:)
@@ -66,6 +66,7 @@ static constexpr std::string_view error_message(error_category category) noexcep
 	switch(category) {
 	case error_category::success:                return "successed";
 	case error_category::ready:                  return "ready to build";
+	case error_category::empty_pattern:          return "empty pattern";
 	case error_category::empty_operand:          return "empty operand";
 	case error_category::bad_escape:             return "bad escape";
 	case error_category::missing_paren:          return "missing parentheses";
@@ -260,35 +261,7 @@ template <typename CharT>
 struct nfa_builder {
 	// a factory of non-determinstic-finite-automaton
 	// NFA M = (Q, Σ, δ, q0, f) 
-	
-	/*	sub expression(e) complexity(ψ) algorithm:
 
-		TODO: out of dated, needs update
-
-		R = 
-			R or [] or [R] or [^] or [^R]   (R is a single range/edge)
-			             : ψ(R) = 1
-			[R1R2...Rn]  : ψ(R) = n + 1               (n > 1)
-			[^R1R2...Rn] : ψ(R) = n + 2               (n > 1)
-			R1 | R2      : ψ(R) = ψ(R1) + ψ(R2) + 3
-			R1 R2        : ψ(R) = ψ(R1) + ψ(R2)
-			R1*          : ψ(R) = ψ(R1) + 1
-			R1+          : ψ(R) = 2ψ(R1)
-			R1?          : ψ(R) = ψ(R1) + 2
-			R1{m}        : ψ(R) = mψ(R1)              (if ψ(R) <= max_unroll_complexity)
-			R1{m,}       : ψ(R) = (m + 1)ψ(R1)        (if ψ(R) <= max_unroll_complexity)
-			R1{m,n}      : ψ(R) = nψ(R1) + (n - m)    (if ψ(R) <= max_unroll_complexity)
-
-		if ψ(R) <= max_unroll_complexity: 
-			using trivial unroll algorithm: 
-				R{m}   -> R...R for m times R;
-				R{m,}  -> R...R+ for m times R;
-				R{m,n} -> R...R(R?...R?) for m times R and n - m times (R?)
-		else: 
-			TODO: using loop algorithm for the sub expression. 
-	*/
-
-	
 	using char_t = CharT;
 	using range_t = char_range<char_t>;
 
@@ -620,8 +593,8 @@ public:
 				
 				auto pre_state = insert_new_state(top_begin_state());
 				pre_state->add_outgoing(begin_edge)
-				     ->add_outgoing(edge::make_epsilon(end_state));
-					 
+				         ->add_outgoing(edge::make_epsilon(end_state));
+
 				begin_edge = edge::make_epsilon(pre_state);
 				complexity += 2;
 				
@@ -971,6 +944,8 @@ public:
 		case oper::lparen_negative_lookahead:
 			// TODO?
 			return error_category::unsupported_features;
+			break;
+		default:
 			break;
 		}
 		return error_category::success;
@@ -1339,9 +1314,10 @@ public:
 				complexity = new_complexity;
 			}
 			break;
+		default: 
+			break;
 		}
 		return true;
-
 	}
 
 	braces_result parse_braces(pattern_iterator_t& pos, const pattern_iterator_t& end) {
@@ -1604,10 +1580,10 @@ struct regular_expression_engine {
 	using char_t = CharT;
 
 	using string_t = basic_string<char_t>;
-	// immutable
 	using string_view_t = basic_string_view<char_t>;
 	// mutable
 	using pos_t = char_t*;
+	// immutable
 	using const_pos_t = const char_t*;
 
 	using nfa_t = non_determinstic_finite_automaton<char_t>;
@@ -1618,15 +1594,10 @@ struct regular_expression_engine {
 	// stores the contexts of captures in running nfa
 	// use during runtime
 	struct state_context {
-
 		struct capture {
 
 			// capture range: [begin, end)
-			// begin == end represents empty string view ""
-			
-			// hard to use
-			// view_iterator_t begin, end;
-			// using const_pos_t = const char_t*;
+			// begin == end represents a empty string view ""
 
 			const_pos_t begin, end;
 
@@ -2020,18 +1991,43 @@ public:
 		return search_all<ResultViewT>(s.data(), s.data() + s.size());
 	}
 		
-	// this method has no proper implement semantics, 
-	// cuz the length of input string not necessary equals to output
-	// size_t replace(pos_t& start, const_pos_t end, string_view_t replacement, size_t count = -1);
+	// UB if [pos, end) and [out, ...) overlap
+	// callers should make sure the output string will not exceed its boundary
+	template <std::output_iterator<char_t> IteratorT>
+	size_t replace(const_pos_t pos, const_pos_t end, IteratorT out, string_view_t replacement, size_t count = -1) {
+
+		auto captured_groups = search_all<std::pair<const_pos_t, const_pos_t>>(pos, end);
+
+		count = std::min(count, captured_groups.size());
+		if(count == 0) {
+			std::copy(pos, end, out);
+			return 0;
+		}
+
+		auto reached_group_it = captured_groups.cbegin();
+		while(reached_group_it != std::next(captured_groups.cbegin(), count)) {
+			auto [from, to] = reached_group_it->operator[](0);
+			// copy non-captured chars as if.
+			out = std::copy(pos, from, out);
+			// replace captured chars with replacement
+			out = std::copy(replacement.cbegin(), replacement.cend(), out);
+			// jump pos 
+			pos = to;
+			++reached_group_it;
+		}
+		// copy tailing chars
+		std::copy(pos, end, out);
+		
+		return count;
+	}
 
 	// replace: the match of pattern for at most 'count' times with replacement 
 	// returns the real count of replacements
 	size_t replace(string_t& target, string_view_t replacement, size_t count = -1) {
-		auto pos = target.data(), 
-			 end = target.data() + target.size();
+		const_pos_t pos = target.data(), 
+			        end = std::next(target.data(), target.size());
 
-		const vector<vector<std::pair<pos_t, pos_t>>>& captured_groups 
-			= search_all<std::pair<pos_t, pos_t>>(pos, end);
+		auto captured_groups = search_all<std::pair<const_pos_t, const_pos_t>>(pos, end);
 
 		count = std::min(count, captured_groups.size());
 		if(count == 0) return 0;
@@ -2055,7 +2051,7 @@ public:
 		while(reached_group_it != std::next(captured_groups.cbegin(), count)) {
 			auto [from, to] = reached_group_it->operator[](0);
 			// copy non-captured chars as if.
-			buf_it = std::copy<const_pos_t>(pos, from, buf_it);
+			buf_it = std::copy(pos, from, buf_it);
 			// replace captured chars with replacement
 			buf_it = std::copy(replacement.cbegin(), replacement.cend(), buf_it);
 			// jump pos 
@@ -2063,7 +2059,7 @@ public:
 			++reached_group_it;
 		}
 		// copy tailing chars
-		std::copy<const_pos_t>(pos, end, buf_it);
+		std::copy(pos, end, buf_it);
 		
 		std::swap(target, buf);
 
