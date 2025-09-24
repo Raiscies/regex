@@ -122,11 +122,14 @@ struct char_range {
 	}
 };
 
-template <typename CharT>
-constexpr bool in_range(CharT a, CharT b, CharT x) noexcept{ return a <= x && x <= b; }
+template <typename CharT, typename CompareCharT>
+constexpr bool in_range(CharT a, CharT b, CompareCharT x) noexcept{
+	using com = std::common_type_t<CharT, CompareCharT>;
+	return com(a) <= com(x) && com(x) <= com(b); 
+}
 
-template <typename CharT>
-constexpr bool in_range(const char_range<CharT>& r, CharT x) noexcept{ return r.is_member(x); }
+template <typename CharT, typename CompareCharT>
+constexpr bool in_range(const char_range<CharT>& r, CompareCharT x) noexcept{ return r.is_member(x); }
 
 template <typename CharT>
 constexpr int hex_val(CharT x) noexcept{
@@ -298,6 +301,7 @@ struct nfa_builder {
 		state_id_t id;
 		
 		state* add_outgoing(const edge& e) {
+			// whats your problem?!
 			edges.push_back(e);
 			return this;
 		}
@@ -2003,7 +2007,6 @@ public:
 			std::copy(pos, end, out);
 			return 0;
 		}
-
 		auto reached_group_it = captured_groups.cbegin();
 		while(reached_group_it != std::next(captured_groups.cbegin(), count)) {
 			auto [from, to] = reached_group_it->operator[](0);
@@ -2136,6 +2139,38 @@ std::tuple<error_category, impl::non_determinstic_finite_automaton<CharT>> compi
 	impl::nfa_builder<CharT> builder{pattern};
 	return {builder.get_result(), builder.generate()};
 }
+
+namespace literal {
+	
+// literal regex object
+
+impl::regular_expression_engine<char> operator ""_re(const char* pattern, size_t n) {
+	impl::nfa_builder<char> builder{std::string(pattern, n)};
+	assert(builder.get_result() == error_category::success);
+	return builder.generate();
+} 
+impl::regular_expression_engine<wchar_t> operator ""_re(const wchar_t* pattern, size_t n) {
+	impl::nfa_builder<wchar_t> builder{std::wstring(pattern, n)};
+	assert(builder.get_result() == error_category::success);
+	return builder.generate();
+} 
+impl::regular_expression_engine<char8_t> operator ""_re(const char8_t* pattern, size_t n) {
+	impl::nfa_builder<char8_t> builder{std::u8string(pattern, n)};
+	assert(builder.get_result() == error_category::success);
+	return builder.generate();
+} 
+impl::regular_expression_engine<char16_t> operator ""_re(const char16_t* pattern, size_t n) {
+	impl::nfa_builder<char16_t> builder{std::u16string(pattern, n)};
+	assert(builder.get_result() == error_category::success);
+	return builder.generate();
+} 
+impl::regular_expression_engine<char32_t> operator ""_re(const char32_t* pattern, size_t n) {
+	impl::nfa_builder<char32_t> builder{std::u32string(pattern, n)};
+	assert(builder.get_result() == error_category::success);
+	return builder.generate();
+} 
+
+};
 
 } // namespace regex
 
