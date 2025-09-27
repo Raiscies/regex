@@ -30,8 +30,7 @@ int main(int argc, const char** argv) {
         Fusce augue ante, tincidunt et mi sed, mattis semper urna. 
         Donec fermentum ipsum id efficitur hendrerit. 
         Pellentesque efficitur interdum semper. 
-        Sed tristique massa eros, 
-        nec pulvinar tortor mollis vitae. 
+        Sed tristique massa eros, nec pulvinar tortor mollis vitae. 
         Integer dapibus viverra ornare.
     )"); 
 

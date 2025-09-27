@@ -291,7 +291,7 @@ struct nfa_builder {
 	
 	// internal representation(IR) of NFA state
 	struct state {
-		
+	
 		state_flag flag;
 
 		// out-going edges
@@ -1680,8 +1680,7 @@ struct regular_expression_engine {
 
 	}; // struct state_context
 
-	
-	const nfa_t& nfa;
+	nfa_t nfa;
 
 protected:
 	vector<state_context> state_contexts;
@@ -2147,27 +2146,27 @@ namespace literal {
 impl::regular_expression_engine<char> operator ""_re(const char* pattern, size_t n) {
 	impl::nfa_builder<char> builder{std::string(pattern, n)};
 	assert(builder.get_result() == error_category::success);
-	return builder.generate();
+	return regular_expression_engine<char>{builder.generate()};
 } 
 impl::regular_expression_engine<wchar_t> operator ""_re(const wchar_t* pattern, size_t n) {
 	impl::nfa_builder<wchar_t> builder{std::wstring(pattern, n)};
 	assert(builder.get_result() == error_category::success);
-	return builder.generate();
+	return regular_expression_engine<wchar_t>{builder.generate()};
 } 
 impl::regular_expression_engine<char8_t> operator ""_re(const char8_t* pattern, size_t n) {
 	impl::nfa_builder<char8_t> builder{std::u8string(pattern, n)};
 	assert(builder.get_result() == error_category::success);
-	return builder.generate();
+	return regular_expression_engine<char8_t>{builder.generate()};
 } 
 impl::regular_expression_engine<char16_t> operator ""_re(const char16_t* pattern, size_t n) {
 	impl::nfa_builder<char16_t> builder{std::u16string(pattern, n)};
 	assert(builder.get_result() == error_category::success);
-	return builder.generate();
+	return regular_expression_engine<char16_t>{builder.generate()};
 } 
 impl::regular_expression_engine<char32_t> operator ""_re(const char32_t* pattern, size_t n) {
 	impl::nfa_builder<char32_t> builder{std::u32string(pattern, n)};
 	assert(builder.get_result() == error_category::success);
-	return builder.generate();
+	return regular_expression_engine<char32_t>{builder.generate()};
 } 
 
 };
